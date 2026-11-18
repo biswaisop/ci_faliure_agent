@@ -8,6 +8,7 @@ router = APIRouter(prefix="/github", tags=["webhook"])
 
 @router.post("/webhook")
 async def github_webhooks(request: Request):
+    """Handle incoming GitHub webhook events and detect failed CI workflow runs."""
     payload = await request.body()
 
     print("WEBHOOK RECEIVED!")
