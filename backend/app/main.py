@@ -27,6 +27,11 @@ def health_check():
     return {"status": "ok"}
 
 
+
+#including the webhook route
+from app.routes import gh_webhook
+app.include_router(gh_webhook.router,  tags=["webhook"])
+
 if __name__ == "__main__":
     import uvicorn
 
