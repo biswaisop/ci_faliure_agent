@@ -150,14 +150,16 @@ async def get_commit_diff(
 
 async def get_run_history(
     owner: str,
-    repo: str, 
+    repo: str,
     workflow_id: str,
     token: str,
     branch: str | None = None,
-    per_page: int = 10
+    per_page: int = 100
 ) -> list:
+    """Fetch completed workflow runs with pagination."""
+
     url = (
-        f"https://api.github.com/repos/{owner}/{repo}"
+        f"{BASE_URL}/repos/{owner}/{repo}"
         f"/actions/workflows/{workflow_id}/runs"
     )
 
@@ -168,34 +170,47 @@ async def get_run_history(
     }
 
     params = {
-        "per_page": per_page
+        "per_page": per_page,
+        "status": "completed"
     }
+
     if branch:
         params["branch"] = branch
+
+    runs = []
+
     async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.get(
-            url, 
-            headers=headers,
-            params=params
-        )
+        next_url = url
 
-        response.raise_for_status()
-        data = response.json()
+        while next_url:
+            response = await client.get(
+                next_url,
+                headers=headers,
+                params=params
+            )
+            response.raise_for_status()
 
-        return [
-            {
-                "id": run["id"],
-                "run_number": run["run_number"],
-                "head_sha": run["head_sha"],
-                "head_branch": run["head_branch"],
-                "status": run["status"],
-                "conclusion": run["conclusion"],
-                "created_at": run["created_at"],
-                "updated_at": run["updated_at"],
-                "event": run["event"]
-            }
-            for run in data.get("workflow_runs", [])
-        ]
+            data = response.json()
+
+            for run in data.get("workflow_runs", []):
+                runs.append({
+                    "id": run["id"],
+                    "workflow_id": run["workflow_id"],
+                    "run_number": run["run_number"],
+                    "run_attempt": run["run_attempt"],
+                    "head_sha": run["head_sha"],
+                    "head_branch": run["head_branch"],
+                    "status": run["status"],
+                    "conclusion": run["conclusion"],
+                    "created_at": run["created_at"],
+                    "updated_at": run["updated_at"],
+                    "event": run["event"]
+                })
+
+            next_url = response.links.get("next", {}).get("url")
+            params = None
+
+    return runs
 
 async def get_run(
     owner: str,
