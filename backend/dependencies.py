@@ -1,5 +1,5 @@
 """
-Dependency Factory for CI Agent.
+Dependency Factory for AutopCI.
 
 Centralizes the instantiation and provisioning of application dependencies,
 including GitHub API collectors and delivery deduplicators, for FastAPI dependency
