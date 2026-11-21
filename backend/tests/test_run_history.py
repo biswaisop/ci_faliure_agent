@@ -1,12 +1,14 @@
+"""
+Manual verification test script for GitHub collector: workflow run history.
+"""
 
 import asyncio
 
 from app.services.gh_auth import get_installation_token
-from app.services.gh_collector import get_run_history
+from dependencies import get_github_collector
 
 OWNER = "cachette-cloud"
 REPO = "demo-repository"
-
 INSTALLATION_ID = 183189785
 
 # Replace with your actual workflow ID
@@ -15,21 +17,19 @@ WORKFLOW_ID = "auto-assign.yml"
 
 async def main():
     print("Generating installation token...")
-
     token = await get_installation_token(INSTALLATION_ID)
+    collector = get_github_collector()
 
     print("Fetching workflow history...")
-
-    history = await get_run_history(
+    history = await collector.get_run_history(
         owner=OWNER,
         repo=REPO,
         workflow_id=WORKFLOW_ID,
         token=token,
-        per_page=10
+        per_page=10,
     )
 
     print("\n========== WORKFLOW HISTORY ==========")
-
     print("Total runs retrieved:", len(history))
 
     for run in history:

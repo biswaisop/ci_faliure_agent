@@ -1,7 +1,12 @@
 .env
-.venv
-.node_modules
-.vs_code
-*/__pycache__/**
+.venv/
+node_modules/
+.vscode/
 secrets/
 concept.md
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/

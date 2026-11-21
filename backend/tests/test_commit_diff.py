@@ -1,9 +1,12 @@
+"""
+Manual verification test script for GitHub collector: commit comparison diff.
+"""
 
 import asyncio
 from dotenv import load_dotenv
 
 from app.services.gh_auth import get_installation_token
-from app.services.gh_collector import get_commit_diff
+from dependencies import get_github_collector
 
 load_dotenv()
 
@@ -18,17 +21,16 @@ HEAD_SHA = "ea5319f98565e005c7e393297eaad1e179430f0f"
 
 async def main():
     print("Generating installation token...")
-
     token = await get_installation_token(INSTALLATION_ID)
+    collector = get_github_collector()
 
     print("Fetching commit diff...")
-
-    result = await get_commit_diff(
-        OWNER,
-        REPO,
-        BASE_SHA,
-        HEAD_SHA,
-        token
+    result = await collector.get_commit_diff(
+        owner=OWNER,
+        repo=REPO,
+        base=BASE_SHA,
+        head=HEAD_SHA,
+        token=token,
     )
 
     print("\n========== COMMIT DIFF ==========")
