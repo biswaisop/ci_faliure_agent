@@ -15,12 +15,17 @@ from app.db.repositories.workflow_run_repository import (
     WorkflowRunInstallationConflict,
     WorkflowRunRepository,
 )
+from app.db.models.workflow_run import Evidence
+Update
+
 from app.services.gh_auth import get_installation_id, get_installation_token
 from app.services.gh_collector import GitHubCollector
 from app.services.github_sync_service import GitHubSyncService
 from app.services.github_webhook_event import GitHubWebhook
+from app.services.log_reducer import reduce_job_log
 from app.services.webhook_errors import WebhookProcessingError, processing_error
 from dependencies import get_github_collector
+
 
 logger = logging.getLogger(__name__)
 
@@ -78,13 +83,85 @@ async def collect_workflow_run(
         if not isinstance(token, str) or not token.strip():
             raise WebhookProcessingError("missing_installation_token")
 
+        # jobs = await collector.get_failed_jobs(
+        #     owner=record.owner.login if record else repo.owner,
+        #     repo=record.name if record else repo.name,
+        #     run_id=run.run_id, token=token, run_attempt=run.run_attempt,
+        # )
+        # await runs.add_failed_jobs(run, [FailedJob.model_validate(job) for job in jobs])
+        # await runs.update_collection_status(run, "completed")
+
+        owner = record.owner.login if record else repo.owner
+        repo_name = record.name if record else repo.name
+
         jobs = await collector.get_failed_jobs(
-            owner=record.owner.login if record else repo.owner,
-            repo=record.name if record else repo.name,
-            run_id=run.run_id, token=token, run_attempt=run.run_attempt,
+            owner=owner,
+            repo=repo_name,
+            run_id=run.run_id,
+            token=token,
+            run_attempt=run.run_attempt,
         )
-        await runs.add_failed_jobs(run, [FailedJob.model_validate(job) for job in jobs])
+
+        await runs.add_failed_jobs(
+            run,
+            [FailedJob.model_validate(job) for job in jobs],
+        )
+
+        failure_packets = []
+
+        for job in jobs:
+            job_id = job["id"]
+
+            raw_log = await collector.get_job_log(
+                owner=owner,
+                repo=repo_name,
+                job_id=job_id,
+                token=token,
+            )
+
+            failed_steps = job.get("failed_steps")
+
+            if failed_steps is None:
+                failed_steps = [
+                    step
+                    for step in job.get("steps", [])
+                    if step.get("conclusion") == "failure"
+                ]
+
+            failed_step_name = (
+                failed_steps[0].get("name")
+                if failed_steps else None
+            )
+
+            packet = reduce_job_log(
+                raw_log=raw_log,
+                job_id=job_id,
+                job_name=job["name"],
+                failed_step=failed_step_name,
+            )
+
+            failure_packets.append(packet)
+
+            logger.info(
+                "Failure packet generated: run_id=%s job_id=%s "
+                "error_type=%s status=%s",
+                run.run_id,
+                job_id,
+                packet.error_type,
+                packet.extraction_status,
+            )
+
+        # 4. Persist failure packets
+        await runs.update_evidence(
+            run,
+            EvidenceUpdate(
+                failure_packets=failure_packets
+            ),
+        )
+
+        # 5. Mark collection as completed only after all evidence is saved
         await runs.update_collection_status(run, "completed")
+
     except WorkflowRunInstallationConflict as exc:
         raise WebhookProcessingError("repository_unavailable") from exc
     except Exception:

@@ -4,6 +4,8 @@ from typing import Annotated, Literal
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.db.models.github_installation import GitHubId
+from app.schema.failure_packet import FailurePacket
+
 
 CollectionStatus = Literal["pending", "collecting", "completed", "failed"]
 LogStatus = Literal["not_collected", "available", "missing", "expired", "failed"]
@@ -48,7 +50,7 @@ class FailedJob(BaseModel):
 class EvidenceUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    failure_packet: str | None = Field(default=None, max_length=24_000)
+    failure_packets: list[FailurePacket] | None = None
     base_sha: ShortText | None = None
     diff_summary: str | None = Field(default=None, max_length=8_000)
 
@@ -59,7 +61,7 @@ class RunEvidence(EvidenceUpdate):
 
 class WorkflowRun(WorkflowRunMetadata):
     model_config = ConfigDict(extra="ignore")
-
+    failure_packets: list[FailurePacket] | None = None
     failed_jobs: list[FailedJob] = Field(default_factory=list)
     evidence: RunEvidence = Field(default_factory=RunEvidence)
     created_at: datetime
