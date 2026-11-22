@@ -15,8 +15,7 @@ from app.db.repositories.workflow_run_repository import (
     WorkflowRunInstallationConflict,
     WorkflowRunRepository,
 )
-from app.db.models.workflow_run import Evidence
-Update
+from app.db.models.workflow_run import EvidenceUpdate
 
 from app.services.gh_auth import get_installation_id, get_installation_token
 from app.services.gh_collector import GitHubCollector
