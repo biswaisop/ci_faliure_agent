@@ -3,9 +3,9 @@ from typing import Annotated, Literal
 
 from pydantic import AliasChoices, BaseModel, Field, ValidationError
 
-from app.schema.github_installation import GitHubAccount, GitHubId
-from app.schema.webhook_delivery import DeliveryMetadata
-from app.schema.workflow_run import WorkflowRunMetadata
+from app.db.models.github_installation import GitHubAccount, GitHubId
+from app.db.models.webhook_delivery import DeliveryMetadata
+from app.db.models.workflow_run import WorkflowRunMetadata
 
 GitHubEvent = Literal["workflow_run", "installation", "installation_repositories", "repository"]
 GitHubPathSegment = Annotated[str, Field(pattern=r"^[a-zA-Z0-9_.-]{1,100}$")]

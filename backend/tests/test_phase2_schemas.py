@@ -4,11 +4,11 @@ import pytest
 from bson import BSON, ObjectId
 from pydantic import ValidationError
 
-from app.schema.github_installation import GitHubInstallation
-from app.schema.github_repository import GitHubRepository
-from app.schema.membership import UserMembership
-from app.schema.webhook_delivery import WebhookDelivery
-from app.schema.workflow_run import EvidenceUpdate, FailedJob, WorkflowRun
+from app.db.models.github_installation import GitHubInstallation
+from app.db.models.github_repository import GitHubRepository
+from app.db.models.membership import UserMembership
+from app.db.models.webhook_delivery import WebhookDelivery
+from app.db.models.workflow_run import EvidenceUpdate, FailedJob, WorkflowRun
 
 NOW = datetime(2026, 11, 23, tzinfo=UTC)
 OWNER = {"github_account_id": 20, "login": "example", "type": "Organization"}

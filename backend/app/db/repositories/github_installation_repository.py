@@ -1,12 +1,12 @@
 from pymongo.errors import DuplicateKeyError
 
-from app.db.mongodb import MongoDb
-from app.db.repositories.user_repositories import now_utc
-from app.schema.github_installation import (
+from app.db.models.github_installation import (
     GitHubInstallation,
     InstallationMetadata,
     InstallationStatus,
 )
+from app.db.mongodb import MongoDb
+from app.db.repositories.user_repositories import now_utc
 
 
 class GitHubInstallationRepository:

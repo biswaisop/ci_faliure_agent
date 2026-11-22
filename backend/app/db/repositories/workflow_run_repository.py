@@ -2,9 +2,7 @@ from bson import BSON
 from pymongo import DESCENDING
 from pymongo.errors import DuplicateKeyError
 
-from app.db.mongodb import MongoDb
-from app.db.repositories.user_repositories import now_utc
-from app.schema.workflow_run import (
+from app.db.models.workflow_run import (
     CollectionStatus,
     EvidenceUpdate,
     FailedJob,
@@ -12,6 +10,8 @@ from app.schema.workflow_run import (
     WorkflowRunKey,
     WorkflowRunMetadata,
 )
+from app.db.mongodb import MongoDb
+from app.db.repositories.user_repositories import now_utc
 
 MAX_FAILED_JOBS_BYTES = 2 * 1024 * 1024
 

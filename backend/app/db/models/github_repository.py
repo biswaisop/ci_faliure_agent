@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
-from app.schema.github_installation import GitHubAccount, GitHubId
+from app.db.models.github_installation import GitHubAccount, GitHubId
 
 
 class RepositoryMetadata(BaseModel):

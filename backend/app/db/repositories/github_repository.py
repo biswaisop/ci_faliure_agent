@@ -1,9 +1,9 @@
 from pymongo.collation import Collation
 from pymongo.errors import DuplicateKeyError
 
+from app.db.models.github_repository import GitHubRepository, RepositoryMetadata
 from app.db.mongodb import MongoDb
 from app.db.repositories.user_repositories import now_utc
-from app.schema.github_repository import GitHubRepository, RepositoryMetadata
 
 FULL_NAME_COLLATION = Collation(locale="en", strength=2)
 

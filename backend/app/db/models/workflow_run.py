@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
-from app.schema.github_installation import GitHubId
+from app.db.models.github_installation import GitHubId
 
 CollectionStatus = Literal["pending", "collecting", "completed", "failed"]
 LogStatus = Literal["not_collected", "available", "missing", "expired", "failed"]

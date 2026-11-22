@@ -3,8 +3,8 @@
 import asyncio
 from typing import Protocol
 
+from app.db.models.webhook_delivery import DeliveryMetadata
 from app.db.repositories.webhook_delivery_repository import WebhookDeliveryRepository
-from app.schema.webhook_delivery import DeliveryMetadata
 
 
 class DeliveryDeduplicator(Protocol):

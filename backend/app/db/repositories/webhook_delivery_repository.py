@@ -3,13 +3,13 @@ from datetime import datetime
 from pymongo.errors import DuplicateKeyError
 from pymongo.write_concern import WriteConcern
 
-from app.db.mongodb import MongoDb
-from app.db.repositories.user_repositories import now_utc
-from app.schema.webhook_delivery import (
+from app.db.models.webhook_delivery import (
     DeliveryMetadata,
     ProcessingError,
     WebhookDelivery,
 )
+from app.db.mongodb import MongoDb
+from app.db.repositories.user_repositories import now_utc
 
 
 class WebhookDeliveryRepository:

@@ -10,7 +10,9 @@ export async function githubRequest(getToken, endpoint, body, signal) {
   });
   const data = await response.json().catch(() => null);
   if (!response.ok || !data) {
-    throw new Error(typeof data?.detail === "string" ? data.detail : "The GitHub request failed. Try again.");
+    throw new Error(
+      typeof data?.detail === "string" ? data.detail : `The GitHub request failed (HTTP ${response.status}).`,
+    );
   }
   return data;
 }

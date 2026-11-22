@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import os
 import re
 import secrets
@@ -9,6 +10,7 @@ from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
+from jwt import InvalidKeyError
 from pydantic import BaseModel, Field
 from pymongo.errors import DuplicateKeyError
 
@@ -18,6 +20,7 @@ from app.services.gh_installations import read_installations, verify_user_instal
 from config import settings
 
 router = APIRouter(prefix="/api/github/installations", tags=["github-installations"])
+logger = logging.getLogger(__name__)
 ClerkUser = Annotated[str, Depends(current_clerk_user_id)]
 InstallationId = Annotated[int, Field(gt=0, le=2**53 - 1)]
 State = Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{43}$")]
@@ -56,7 +59,12 @@ async def list_installations(user_id: ClerkUser):
     installation_ids = [item["installation_id"] async for item in cursor]
     try:
         installations = await read_installations(installation_ids)
-    except (httpx.HTTPError, ValueError, OSError, KeyError) as exc:
+    except (OSError, InvalidKeyError) as exc:
+        logger.warning("Could not load GitHub App private key (%s)", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="The GitHub App private key is unreadable or invalid.") from exc
+    except (httpx.HTTPError, ValueError, KeyError) as exc:
+        reason = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else type(exc).__name__
+        logger.warning("Could not check installations with GitHub (%s)", reason)
         raise HTTPException(status_code=502, detail="Could not check installations with GitHub.") from exc
 
     return {

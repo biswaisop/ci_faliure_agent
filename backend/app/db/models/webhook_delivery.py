@@ -3,7 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.schema.github_installation import GitHubId
+from app.db.models.github_installation import GitHubId
 
 DeliveryStatus = Literal["pending", "processing", "completed", "failed"]
 ProcessingError = Literal[

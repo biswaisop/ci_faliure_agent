@@ -12,6 +12,11 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.errors import ConnectionFailure
 
 from app.db.indexes import setup_indexes
+from app.db.models.github_installation import InstallationMetadata
+from app.db.models.github_repository import RepositoryMetadata
+from app.db.models.membership import VerifiedMembershipGrant
+from app.db.models.webhook_delivery import DeliveryMetadata
+from app.db.models.workflow_run import EvidenceUpdate, FailedJob, WorkflowRunMetadata
 from app.db.mongodb import MongoDb
 from app.db.repositories import UserRepository
 from app.db.repositories.github_installation_repository import (
@@ -25,11 +30,6 @@ from app.db.repositories.workflow_run_repository import (
     WorkflowRunRepository,
 )
 from app.main import app
-from app.schema.github_installation import InstallationMetadata
-from app.schema.github_repository import RepositoryMetadata
-from app.schema.membership import VerifiedMembershipGrant
-from app.schema.webhook_delivery import DeliveryMetadata
-from app.schema.workflow_run import EvidenceUpdate, FailedJob, WorkflowRunMetadata
 from app.services import gh_installations, github_sync_service, webhook_processor
 from app.services.deduplicator import MongoDeliveryDeduplicator
 from app.services.gh_collector import GitHubCollector

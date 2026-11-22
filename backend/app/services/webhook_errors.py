@@ -1,7 +1,7 @@
 import httpx
 from pymongo.errors import PyMongoError
 
-from app.schema.webhook_delivery import ProcessingError
+from app.db.models.webhook_delivery import ProcessingError
 
 
 class WebhookProcessingError(Exception):

@@ -1,15 +1,19 @@
 from typing import Protocol
 
+from app.db.models.github_installation import GitHubInstallation
+from app.db.models.github_repository import GitHubRepository
+from app.db.models.membership import (
+    ResourceType,
+    UserMembership,
+    VerifiedMembershipGrant,
+)
+from app.db.models.workflow_run import WorkflowRunMetadata
 from app.db.repositories.github_installation_repository import (
     GitHubInstallationRepository,
 )
 from app.db.repositories.github_repository import GitHubRepositoryRepository
 from app.db.repositories.membership_repository import MembershipRepository
 from app.db.repositories.user_repositories import UserRepository
-from app.schema.github_installation import GitHubInstallation
-from app.schema.github_repository import GitHubRepository
-from app.schema.membership import ResourceType, UserMembership, VerifiedMembershipGrant
-from app.schema.workflow_run import WorkflowRunMetadata
 
 
 class MembershipVerifier(Protocol):

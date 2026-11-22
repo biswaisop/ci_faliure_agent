@@ -17,8 +17,8 @@ export function GithubIntegration({ getToken }) {
       .then((result) => {
         if (!controller.signal.aborted) setData(result);
       })
-      .catch(() => {
-        if (!controller.signal.aborted) setError("Could not check GitHub connections. Try again.");
+      .catch((cause) => {
+        if (!controller.signal.aborted) setError(cause.message);
       });
     return () => controller.abort();
   }, [getToken, request]);

@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 
 from pymongo.errors import PyMongoError
 
+from app.db.models.workflow_run import FailedJob, WorkflowRunMetadata
 from app.db.repositories.github_installation_repository import (
     GitHubInstallationRepository,
 )
@@ -14,7 +15,6 @@ from app.db.repositories.workflow_run_repository import (
     WorkflowRunInstallationConflict,
     WorkflowRunRepository,
 )
-from app.schema.workflow_run import FailedJob, WorkflowRunMetadata
 from app.services.gh_auth import get_installation_id, get_installation_token
 from app.services.gh_collector import GitHubCollector
 from app.services.github_sync_service import GitHubSyncService

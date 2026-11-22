@@ -3,7 +3,9 @@ from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlparse
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
+from jwt import InvalidKeyError
 
 from app.core.clerk_auth import current_clerk_user_id
 from app.main import app
@@ -21,6 +23,40 @@ def github_installation(installation_id, account, account_type):
         "repository_selection": "selected",
         "suspended_at": None,
     }
+
+
+@pytest.mark.parametrize("error, detail, log_reason", [
+    (
+        InvalidKeyError("sensitive key diagnostics"),
+        "The GitHub App private key is unreadable or invalid.",
+        "InvalidKeyError",
+    ),
+    (
+        httpx.HTTPStatusError(
+            "sensitive upstream diagnostics",
+            request=httpx.Request("GET", "https://api.github.com/app/installations/14"),
+            response=httpx.Response(401),
+        ),
+        "Could not check installations with GitHub.",
+        "401",
+    ),
+])
+def test_installation_list_reports_failures_without_exposing_details(monkeypatch, caplog, error, detail, log_reason):
+    async def find_links(*args):
+        yield {"installation_id": 14}
+
+    monkeypatch.setitem(app.dependency_overrides, current_clerk_user_id, lambda: "user_first")
+    monkeypatch.setattr(gh_installations.MongoDb, "github_installations", lambda: SimpleNamespace(find=find_links))
+    read = AsyncMock(side_effect=error)
+    monkeypatch.setattr(gh_installations, "read_installations", read)
+
+    response = TestClient(app).get("/api/github/installations")
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": detail}
+    assert f"({log_reason})" in caplog.text
+    assert "sensitive" not in caplog.text
+    read.assert_awaited_once_with([14])
 
 
 def test_installation_connection_is_verified_and_scoped_to_the_clerk_user(monkeypatch):

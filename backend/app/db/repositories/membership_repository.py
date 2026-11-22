@@ -1,15 +1,15 @@
 from pymongo.errors import DuplicateKeyError
 
-from app.db.mongodb import MongoDb
-from app.db.repositories.github_repository import GitHubRepositoryRepository
-from app.db.repositories.user_repositories import now_utc
-from app.schema.github_repository import GitHubRepository
-from app.schema.membership import (
+from app.db.models.github_repository import GitHubRepository
+from app.db.models.membership import (
     MembershipStatus,
     ResourceType,
     UserMembership,
     VerifiedMembershipGrant,
 )
+from app.db.mongodb import MongoDb
+from app.db.repositories.github_repository import GitHubRepositoryRepository
+from app.db.repositories.user_repositories import now_utc
 
 
 class MembershipRepository:

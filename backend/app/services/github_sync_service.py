@@ -2,12 +2,12 @@ from time import time_ns
 
 import httpx
 
+from app.db.models.github_installation import InstallationMetadata
+from app.db.models.github_repository import RepositoryMetadata
 from app.db.repositories.github_installation_repository import (
     GitHubInstallationRepository,
 )
 from app.db.repositories.github_repository import GitHubRepositoryRepository
-from app.schema.github_installation import InstallationMetadata
-from app.schema.github_repository import RepositoryMetadata
 from app.services.gh_auth import (
     generate_app_jwt,
     get_installation_id,
