@@ -3,6 +3,7 @@ from http import client
 from fastapi.exceptions import FastAPIError
 import os
 from contextlib import asynccontextmanager
+import certifi
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -35,7 +36,8 @@ class MongoDb:
                 uri,
                 maxPoolSize=100,
                 minPoolSize=5,
-                serverSelectionTimeoutMS=5000
+                serverSelectionTimeoutMS=5000,
+                tlsCAFile=certifi.where()
             )
             logger.info("MongoDB Connected")
 

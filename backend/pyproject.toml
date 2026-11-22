@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "certifi>=2026.11.20",
     "clerk-backend-api>=7.1.1",
     "cryptography>=50.0.2",
     "dotenv>=0.9.9",
@@ -15,6 +16,7 @@ dependencies = [
     "motor>=3.7.1",
     "pydantic-settings>=2.16.3",
     "pyjwt>=2.15.1",
+    "pymongo>=4.20.1",
     "pytest>=9.2.0",
     "ruff>=0.17.5",
     "svix>=2.10.0",
