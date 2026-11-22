@@ -47,52 +47,108 @@ async def process_failed_workflow_run(
     await _process_delivery(delivery_id, event, collect, deliveries)
 
 
+
 async def collect_workflow_run(
-    event: GitHubWebhook, runs: WorkflowRunRepository, installations: GitHubInstallationRepository,
-    repositories: GitHubRepositoryRepository, collector: GitHubCollector,
+    event: GitHubWebhook,
+    runs: WorkflowRunRepository,
+    installations: GitHubInstallationRepository,
+    repositories: GitHubRepositoryRepository,
+    collector: GitHubCollector,
 ) -> None:
-    """Collect metadata for the signed run attempt while respecting known access revocations."""
+    """
+    Collect failed workflow evidence and persist failure packets.
+
+    Pipeline:
+    1. Persist workflow metadata.
+    2. Validate installation and repository access.
+    3. Fetch failed jobs for the correct run attempt.
+    4. Persist failed job metadata.
+    5. Fetch and reduce individual job logs.
+    6. Persist failure packets.
+    7. Mark collection as completed.
+    """
+
     run, repo = event.run, event.repository
+
     if run is None or repo is None:
         raise WebhookProcessingError("invalid_github_data")
 
     try:
+        # 1. Persist workflow metadata
         await runs.upsert_workflow_run(run)
         await runs.update_collection_status(run, "collecting")
+
+        # 2. Resolve installation
         installation_id = run.installation_id
+
         if installation_id is None:
-            installation_id = await get_installation_id(repo.owner, repo.name)
-            run = WorkflowRunMetadata.model_validate({**run.model_dump(), "installation_id": installation_id})
+            installation_id = await get_installation_id(
+                repo.owner,
+                repo.name,
+            )
+
+            run = WorkflowRunMetadata.model_validate({
+                **run.model_dump(),
+                "installation_id": installation_id,
+            })
+
             await runs.upsert_workflow_run(run)
 
-        installation = await installations.get_by_installation_id(installation_id)
+        # 3. Validate installation access
+        installation = await installations.get_by_installation_id(
+            installation_id
+        )
+
         if installation is not None and (
-            installation.status != "active" or installation.sync_version != installation.repository_sync_version
+            installation.status != "active"
+            or installation.sync_version
+            != installation.repository_sync_version
         ):
-            raise WebhookProcessingError("installation_unavailable")
+            raise WebhookProcessingError(
+                "installation_unavailable"
+            )
 
-        record = await repositories.get_by_repo_id(repo.github_repo_id)
+        # 4. Validate repository access
+        record = await repositories.get_by_repo_id(
+            repo.github_repo_id
+        )
+
         if record is not None and (
-            not record.is_active or record.installation_id != installation_id
-            or (installation is not None and record.sync_version != installation.repository_sync_version)
+            not record.is_active
+            or record.installation_id != installation_id
+            or (
+                installation is not None
+                and record.sync_version
+                != installation.repository_sync_version
+            )
         ):
-            raise WebhookProcessingError("repository_unavailable")
+            raise WebhookProcessingError(
+                "repository_unavailable"
+            )
 
-        token = await get_installation_token(installation_id)
+        # 5. Acquire GitHub installation token
+        token = await get_installation_token(
+            installation_id
+        )
+
         if not isinstance(token, str) or not token.strip():
-            raise WebhookProcessingError("missing_installation_token")
+            raise WebhookProcessingError(
+                "missing_installation_token"
+            )
 
-        # jobs = await collector.get_failed_jobs(
-        #     owner=record.owner.login if record else repo.owner,
-        #     repo=record.name if record else repo.name,
-        #     run_id=run.run_id, token=token, run_attempt=run.run_attempt,
-        # )
-        # await runs.add_failed_jobs(run, [FailedJob.model_validate(job) for job in jobs])
-        # await runs.update_collection_status(run, "completed")
+        owner = (
+            record.owner.login
+            if record is not None
+            else repo.owner
+        )
 
-        owner = record.owner.login if record else repo.owner
-        repo_name = record.name if record else repo.name
+        repo_name = (
+            record.name
+            if record is not None
+            else repo.name
+        )
 
+        # 6. Fetch failed jobs for this run attempt
         jobs = await collector.get_failed_jobs(
             owner=owner,
             repo=repo_name,
@@ -101,23 +157,51 @@ async def collect_workflow_run(
             run_attempt=run.run_attempt,
         )
 
-        await runs.add_failed_jobs(
-            run,
-            [FailedJob.model_validate(job) for job in jobs],
+        logger.info(
+            "Fetched %d failed jobs: run_id=%s attempt=%s",
+            len(jobs),
+            run.run_id,
+            run.run_attempt,
         )
 
+        # 7. Persist failed job metadata
+        await runs.add_failed_jobs(
+            run,
+            [
+                FailedJob.model_validate(job)
+                for job in jobs
+            ],
+        )
+
+        # 8. Fetch and reduce logs
         failure_packets = []
 
         for job in jobs:
             job_id = job["id"]
+            job_name = job["name"]
 
-            raw_log = await collector.get_job_log(
-                owner=owner,
-                repo=repo_name,
-                job_id=job_id,
-                token=token,
-            )
+            try:
+                raw_log = await collector.get_job_log(
+                    owner=owner,
+                    repo=repo_name,
+                    job_id=job_id,
+                    token=token,
+                )
 
+            except Exception:
+                logger.exception(
+                    "Failed to fetch job log: "
+                    "run_id=%s attempt=%s job_id=%s",
+                    run.run_id,
+                    run.run_attempt,
+                    job_id,
+                )
+
+                # Preserve the job in the evidence even if
+                # the log could not be retrieved.
+                raw_log = None
+
+            # 9. Identify failed steps
             failed_steps = job.get("failed_steps")
 
             if failed_steps is None:
@@ -129,20 +213,23 @@ async def collect_workflow_run(
 
             failed_step_name = (
                 failed_steps[0].get("name")
-                if failed_steps else None
+                if failed_steps
+                else None
             )
 
+            # 10. Extract failure packet
             packet = reduce_job_log(
                 raw_log=raw_log,
                 job_id=job_id,
-                job_name=job["name"],
+                job_name=job_name,
                 failed_step=failed_step_name,
             )
 
             failure_packets.append(packet)
 
             logger.info(
-                "Failure packet generated: run_id=%s job_id=%s "
+                "Failure packet extracted: "
+                "run_id=%s job_id=%s "
                 "error_type=%s status=%s",
                 run.run_id,
                 job_id,
@@ -150,7 +237,7 @@ async def collect_workflow_run(
                 packet.extraction_status,
             )
 
-        # 4. Persist failure packets
+        # 11. Persist all failure packets
         await runs.update_evidence(
             run,
             EvidenceUpdate(
@@ -158,17 +245,62 @@ async def collect_workflow_run(
             ),
         )
 
-        # 5. Mark collection as completed only after all evidence is saved
-        await runs.update_collection_status(run, "completed")
+        logger.warning(
+            "Evidence stored successfully: "
+            "run_id=%s attempt=%s packets=%d",
+            run.run_id,
+            run.run_attempt,
+            len(failure_packets),
+        )
+
+        # 12. Mark collection completed
+        await runs.update_collection_status(
+            run,
+            "completed",
+        )
+
+        logger.info(
+            "Workflow evidence collection completed: "
+            "run_id=%s attempt=%s",
+            run.run_id,
+            run.run_attempt,
+        )
 
     except WorkflowRunInstallationConflict as exc:
-        raise WebhookProcessingError("repository_unavailable") from exc
-    except Exception:
-        # This background boundary records incomplete collection before the delivery records the original error.
+        # Installation mismatch should not be ignored.
         try:
             await runs.update_collection_status(run, "failed")
         except PyMongoError:
-            logger.error("Could not record workflow collection failure", extra=event.metadata.model_dump())
+            logger.exception(
+                "Could not persist failed collection status: run_id=%s",
+                run.run_id,
+            )
+
+        raise WebhookProcessingError(
+            "repository_unavailable"
+        ) from exc
+
+    except Exception:
+        # Keep failure state consistent in MongoDB.
+        try:
+            await runs.update_collection_status(
+                run,
+                "failed",
+            )
+
+        except PyMongoError:
+            logger.exception(
+                "Could not record workflow collection failure: "
+                "run_id=%s",
+                run.run_id,
+            )
+
+        logger.exception(
+            "Workflow collection failed: run_id=%s attempt=%s",
+            run.run_id,
+            run.run_attempt,
+        )
+
         raise
 
 
