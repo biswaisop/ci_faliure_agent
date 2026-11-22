@@ -1,4 +1,4 @@
-# CI Postmortem Agent frontend
+# AutopCI frontend
 
 Copy `.env.example` to `.env.local` in this directory. Add the publishable and secret keys for the same Clerk instance. Set `NEXT_PUBLIC_API_URL` to the FastAPI origin and set `NEXT_PUBLIC_TERMS_URL` and `NEXT_PUBLIC_PRIVACY_URL` to your published legal pages. Keep `CLERK_SECRET_KEY` server-side.
 

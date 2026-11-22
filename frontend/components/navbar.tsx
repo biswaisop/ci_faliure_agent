@@ -1,6 +1,6 @@
-import { Terminal } from "lucide-react";
 import { GithubIcon } from "hugeicons-react";
 import Link from "next/link";
+import { Brand } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 
 export const PROJECT_URL = "https://github.com/biswaisop/ci_faliure_agent";
@@ -9,10 +9,7 @@ export function Navbar() {
   return (
     <header className="site-header">
       <div className="shell nav-inner">
-        <Link href="/" className="brand">
-          <span className="brand-mark"><Terminal aria-hidden="true" size={17} /></span>
-          AutopCI
-        </Link>
+        <Brand />
         <nav aria-label="On this page">
           <a href="#workflow">How it works</a>
           <a href="#diagnosis">Sample report</a>

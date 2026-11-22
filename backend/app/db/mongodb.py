@@ -26,19 +26,26 @@ class MongoDb:
 
     DB_NAME = os.getenv("MONGODB_DB_NAME", "autopci")
     
+    
     @classmethod
     def connect(cls):
         if cls._client is None:
             uri = os.getenv("MONGODB_URI") or os.getenv("MONGODB")
             if not uri:
                 raise ValueError("MONGODB_URI environment variable not set")
-            cls._client = AsyncIOMotorClient(
-                uri,
+
+            kwargs = dict(
                 maxPoolSize=100,
                 minPoolSize=5,
                 serverSelectionTimeoutMS=5000,
-                tlsCAFile=certifi.where()
             )
+
+            # Only use the certifi CA bundle for TLS connections (Atlas).
+            # Local mongod has no TLS, so passing tlsCAFile there breaks the handshake.
+            if uri.startswith("mongodb+srv://") or "mongodb.net" in uri:
+                kwargs["tlsCAFile"] = certifi.where()
+
+            cls._client = AsyncIOMotorClient(uri, **kwargs)
             logger.info("MongoDB Connected")
 
     @classmethod

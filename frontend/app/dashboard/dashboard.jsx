@@ -4,18 +4,14 @@ import { RedirectToSignIn, SignOutButton, UserAvatar, useAuth, useUser } from "@
 import { LogOut } from "lucide-react";
 import { useEffect, useState } from "react";
 import { apiFetch } from "../../lib/api";
-import { AuthBrand } from "../components/auth/auth-branding";
+import { Button } from "@/components/ui/button";
 import { GithubIntegration } from "./github-integration";
-import "../components/auth/auth.css";
 
 const retryDelays = [1000, 2000, 4000];
-const actionClass = "inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-[#37373d] bg-[#18181c] px-4 text-sm font-medium transition-colors hover:bg-[#24242b] motion-reduce:transition-none";
 
 export function DashboardLoading() {
   return (
-    <main className="grid min-h-dvh place-items-center bg-[#09090b] text-[#a1a1aa]">
-      <p role="status" className="text-sm">Loading your workspace…</p>
-    </main>
+    <p role="status" className="py-12 text-sm text-muted">Loading your workspace…</p>
   );
 }
 
@@ -80,49 +76,46 @@ function Workspace({ user, getToken }) {
   }[status];
 
   return (
-    <main className="auth-shell min-h-dvh bg-[#09090b] text-[#fafafa]">
-      <header className="border-b border-[#27272a]">
-        <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-4 px-5 py-4 sm:px-8">
-          <AuthBrand />
-          <SignOutButton redirectUrl="/sign-in">
-            <button type="button" className={actionClass}><LogOut size={16} aria-hidden="true" /> Sign out</button>
-          </SignOutButton>
-        </div>
+    <>
+      <header className="border-b border-line pb-6 sm:pb-8">
+        <h1 className="text-3xl font-semibold tracking-[-0.045em] sm:text-4xl">Workspace overview</h1>
+        <p className="mt-2 max-w-xl text-sm leading-6 text-muted">Connect GitHub repositories to investigate failed GitHub Actions workflows.</p>
       </header>
-      <div className="mx-auto max-w-5xl px-5 py-12 sm:px-8 sm:py-20">
-        <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
-          {name ? `Welcome, ${name}` : "Welcome to CI Postmortem Agent"}
-        </h1>
-        <p className="mt-2 text-sm leading-6 text-[#a1a1aa]">Investigate failed GitHub Actions workflows from your workspace.</p>
+      <GithubIntegration getToken={getToken} />
 
-        <section aria-labelledby="profile-heading" className="mt-8 rounded-xl border border-[#27272a] bg-[#111114] p-5 sm:p-6">
-          <h2 id="profile-heading" className="text-sm font-semibold">Your account</h2>
-          <div className="mt-4 flex items-center gap-4">
-            <UserAvatar appearance={{ elements: { avatarBox: { width: "3rem", height: "3rem" } } }} />
-            <div className="min-w-0">
-              {name && <p className="break-words text-sm font-medium">{name}</p>}
-              {email && <p className="break-words text-sm text-[#a1a1aa]">{email}</p>}
+      <section id="account" aria-labelledby="profile-heading" className="mt-10 scroll-mt-6 sm:mt-12">
+        <h2 id="profile-heading" className="mb-4 text-lg font-semibold tracking-tight">Your account</h2>
+        <div className="rounded-md border border-line bg-panel px-4 py-4 sm:px-5">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex min-w-0 items-center gap-3">
+              <UserAvatar appearance={{ elements: { avatarBox: { width: "2.5rem", height: "2.5rem" } } }} />
+              <div className="min-w-0 wrap-break-word">
+                {name && <p className="text-sm font-medium">{name}</p>}
+                {email && <p className="text-sm text-muted">{email}</p>}
+              </div>
             </div>
+            <SignOutButton redirectUrl="/sign-in">
+              <Button type="button" variant="outline"><LogOut size={16} aria-hidden="true" /> Sign out</Button>
+            </SignOutButton>
           </div>
-          <p role="status" className={profileMessage ? "mt-4 text-sm text-[#a1a1aa]" : "sr-only"}>
+          <p role="status" className={profileMessage ? "mt-4 text-sm text-muted" : "sr-only"}>
             {profileMessage || "Workspace profile loaded."}
           </p>
           {(status === "pending" || status === "error") && (
-            <button
+            <Button
               type="button"
-              className={`mt-3 ${actionClass}`}
+              variant="outline"
+              className="mt-3"
               onClick={() => {
                 setStatus("loading");
                 setRequest((previous) => previous + 1);
               }}
             >
               Retry profile sync
-            </button>
+            </Button>
           )}
-        </section>
-
-        <GithubIntegration getToken={getToken} actionClass={actionClass} />
-      </div>
-    </main>
+        </div>
+      </section>
+    </>
   );
 }

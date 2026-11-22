@@ -5,9 +5,9 @@ Encapsulates all GitHub REST API interactions for collecting CI run details,
 failed job steps, logs, commit diffs, and workflow execution history.
 """
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-import logging
 from typing import Any
 
 import httpx
@@ -59,12 +59,17 @@ class GitHubCollector:
         repo: str,
         run_id: int | str,
         token: str,
+        *,
+        run_attempt: int | None = None,
     ) -> list[dict[str, Any]]:
         """
         Fetch all failed jobs and their failed steps for a specific workflow run.
         Handles pagination across all pages.
         """
-        url = f"{self.base_url}/repos/{owner}/{repo}/actions/runs/{run_id}/jobs"
+        run_url = f"{self.base_url}/repos/{owner}/{repo}/actions/runs/{run_id}"
+        if run_attempt is not None:
+            run_url = f"{run_url}/attempts/{run_attempt}"
+        url = f"{run_url}/jobs"
         headers = self._get_headers(token)
         failed_jobs: list[dict[str, Any]] = []
 
@@ -76,8 +81,9 @@ class GitHubCollector:
                 response = await client.get(next_url, headers=headers, params=params)
                 response.raise_for_status()
 
-                data = response.json()
-                jobs = data.get("jobs", [])
+                jobs = response.json()["jobs"]
+                if not isinstance(jobs, list):
+                    raise TypeError("Invalid GitHub workflow job list")
 
                 for job in jobs:
                     if job.get("conclusion") == "failure":

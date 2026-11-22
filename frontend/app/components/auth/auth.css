@@ -1,14 +1,10 @@
 .auth-branding {
   background:
-    radial-gradient(ellipse at 18% 34%, #2020368c, transparent 70%),
-    linear-gradient(#a5a7fc0b 1px, transparent 1px),
-    linear-gradient(90deg, #a5a7fc0b 1px, transparent 1px),
-    #101014;
+    radial-gradient(ellipse at 18% 34%, #35462865, transparent 70%),
+    linear-gradient(#a8c09412 1px, transparent 1px),
+    linear-gradient(90deg, #a8c09412 1px, transparent 1px),
+    var(--color-panel);
   background-size: auto, 36px 36px, 36px 36px, auto;
-}
-
-.auth-shell :focus-visible {
-  outline-color: #a5a7fc;
 }
 
 @media (prefers-reduced-motion: no-preference) {

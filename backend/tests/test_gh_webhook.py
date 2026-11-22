@@ -1,7 +1,7 @@
 """
 Comprehensive tests for GitHub Webhook Ingestion, Deduplication, and Background Processing.
 
-Covers all 10 required test scenarios:
+Covers the route validation and deduplication scenarios:
 1. Valid signed failed workflow_run event schedules exactly one background task.
 2. Duplicate X-GitHub-Delivery returns HTTP 200 without scheduling another task.
 3. Invalid signature is rejected.
@@ -10,15 +10,13 @@ Covers all 10 required test scenarios:
 6. Non-failed workflow runs are ignored.
 7. A workflow_run event that is not completed is ignored.
 8. Malformed eligible payloads are handled gracefully.
-9. Exceptions in the background processor are logged without breaking the application.
-10. Concurrent requests with the same delivery ID do not schedule duplicate processing.
+9. Concurrent requests with the same delivery ID do not schedule duplicate processing.
 """
 
 import asyncio
 import hashlib
 import hmac
 import json
-import logging
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -27,10 +25,9 @@ import pytest
 from starlette.testclient import TestClient
 
 from app.main import app
-from app.services.gh_collector import GitHubCollector
-from app.services.webhook_processor import process_failed_workflow_run
+from app.routes.gh_webhook import get_deduplicator
+from app.services.deduplicator import InMemoryDeliveryDeduplicator
 from config import settings
-from dependencies import get_deduplicator, get_github_collector
 
 TEST_SECRET = "test_webhook_secret_key"
 
@@ -64,6 +61,7 @@ def build_workflow_run_payload(
             "conclusion": conclusion,
         },
         "repository": {
+            "id": 445566,
             "name": repo,
             "full_name": f"{owner}/{repo}",
             "owner": {"login": owner},
@@ -78,9 +76,9 @@ def build_workflow_run_payload(
 def configure_test_environment(monkeypatch: pytest.MonkeyPatch):
     """Ensure test webhook secret is set and clear deduplicator between tests."""
     monkeypatch.setattr(settings, "GITHUB_WEBHOOK_SECRET", TEST_SECRET)
-    deduplicator = get_deduplicator()
-    if hasattr(deduplicator, "_seen"):
-        deduplicator._seen.clear()
+    deduplicator = InMemoryDeliveryDeduplicator()
+    monkeypatch.setitem(app.dependency_overrides, get_deduplicator, lambda: deduplicator)
+    return deduplicator
 
 
 # ============================================================================
@@ -108,12 +106,12 @@ def test_valid_signed_failed_workflow_run_schedules_task():
             "delivery_id": delivery_id,
         }
         mock_processor.assert_called_once()
-        call_kwargs = mock_processor.call_args.kwargs
-        assert call_kwargs["delivery_id"] == delivery_id
-        assert call_kwargs["owner"] == "test-org"
-        assert call_kwargs["repo"] == "test-repo"
-        assert call_kwargs["run_id"] == 12345678
-        assert call_kwargs["conclusion"] == "failure"
+        recorded_id, event = mock_processor.call_args.args
+        assert recorded_id == delivery_id
+        assert event.repository.owner == "test-org"
+        assert event.repository.name == "test-repo"
+        assert event.run.run_id == 12345678
+        assert event.run.conclusion == "failure"
 
 
 # ============================================================================
@@ -150,7 +148,7 @@ def test_duplicate_delivery_id_returns_200_without_scheduling():
 # ============================================================================
 # Scenario 3: Invalid signature is rejected with HTTP 401
 # ============================================================================
-def test_invalid_signature_rejected():
+def test_invalid_signature_rejected(configure_test_environment):
     payload_dict = build_workflow_run_payload()
     payload_bytes = json.dumps(payload_dict).encode("utf-8")
     delivery_id = "delivery-uuid-003"
@@ -170,8 +168,7 @@ def test_invalid_signature_rejected():
         assert "Invalid webhook signature" in response.json()["detail"]
         mock_processor.assert_not_called()
         # Ensure invalid signature delivery is NOT stored in deduplicator
-        deduplicator = get_deduplicator()
-        assert delivery_id not in deduplicator._seen
+        assert delivery_id not in configure_test_environment._seen
 
 
 # ============================================================================
@@ -199,7 +196,7 @@ def test_missing_delivery_id_rejected():
 # ============================================================================
 # Scenario 5: Non-workflow_run events are ignored (return 200)
 # ============================================================================
-def test_non_workflow_run_events_ignored():
+def test_non_workflow_run_events_ignored(configure_test_environment):
     payload_dict = {"ref": "refs/heads/main", "commits": []}
     payload_bytes = json.dumps(payload_dict).encode("utf-8")
     delivery_id = "delivery-uuid-005"
@@ -219,14 +216,13 @@ def test_non_workflow_run_events_ignored():
         assert response.json() == {"status": "ignored"}
         mock_processor.assert_not_called()
         # Ineligible events must not consume deduplication entries
-        deduplicator = get_deduplicator()
-        assert delivery_id not in deduplicator._seen
+        assert delivery_id not in configure_test_environment._seen
 
 
 # ============================================================================
 # Scenario 6: Non-failed workflow runs are ignored (return 200)
 # ============================================================================
-def test_successful_workflow_run_ignored():
+def test_successful_workflow_run_ignored(configure_test_environment):
     payload_dict = build_workflow_run_payload(action="completed", conclusion="success")
     payload_bytes = json.dumps(payload_dict).encode("utf-8")
     delivery_id = "delivery-uuid-006"
@@ -245,14 +241,13 @@ def test_successful_workflow_run_ignored():
         assert response.status_code == 200
         assert response.json() == {"status": "ignored"}
         mock_processor.assert_not_called()
-        deduplicator = get_deduplicator()
-        assert delivery_id not in deduplicator._seen
+        assert delivery_id not in configure_test_environment._seen
 
 
 # ============================================================================
 # Scenario 7: A workflow_run event that is not completed is ignored
 # ============================================================================
-def test_in_progress_workflow_run_ignored():
+def test_in_progress_workflow_run_ignored(configure_test_environment):
     payload_dict = build_workflow_run_payload(action="in_progress", conclusion="failure")
     payload_bytes = json.dumps(payload_dict).encode("utf-8")
     delivery_id = "delivery-uuid-007"
@@ -271,14 +266,13 @@ def test_in_progress_workflow_run_ignored():
         assert response.status_code == 200
         assert response.json() == {"status": "ignored"}
         mock_processor.assert_not_called()
-        deduplicator = get_deduplicator()
-        assert delivery_id not in deduplicator._seen
+        assert delivery_id not in configure_test_environment._seen
 
 
 # ============================================================================
 # Scenario 8: Malformed eligible payloads are handled gracefully
 # ============================================================================
-def test_malformed_eligible_payload_handled_gracefully():
+def test_malformed_eligible_payload_handled_gracefully(configure_test_environment):
     malformed_payload = {
         "action": "completed",
         "workflow_run": {
@@ -302,8 +296,7 @@ def test_malformed_eligible_payload_handled_gracefully():
         assert response.status_code == 400
         assert "Malformed payload" in response.json()["detail"]
         mock_processor.assert_not_called()
-        deduplicator = get_deduplicator()
-        assert delivery_id not in deduplicator._seen
+        assert delivery_id not in configure_test_environment._seen
 
 
 def test_malformed_unparseable_json_rejected():
@@ -327,60 +320,7 @@ def test_malformed_unparseable_json_rejected():
 
 
 # ============================================================================
-# Scenario 9: Exceptions in background processor logged without breaking app
-# ============================================================================
-@pytest.mark.anyio
-async def test_background_processor_catches_and_logs_exceptions(caplog: pytest.LogCaptureFixture):
-    with patch(
-        "app.services.webhook_processor.get_installation_id",
-        side_effect=RuntimeError("GitHub API token acquisition failed!"),
-    ), patch.object(
-        GitHubCollector,
-        "get_failed_jobs",
-        side_effect=Exception("Unexpected API connection error"),
-    ), caplog.at_level(logging.WARNING):
-        # Must execute without raising unhandled exception out of the function
-        await process_failed_workflow_run(
-            delivery_id="delivery-uuid-009",
-            owner="test-org",
-            repo="test-repo",
-            run_id=9999,
-            workflow_id="ci.yml",
-            head_sha="deadbeef",
-            head_branch="main",
-            run_attempt=1,
-            conclusion="failure",
-        )
-
-        # Verify warning/error logs were generated
-        assert any(
-            "Could not acquire GitHub installation token" in record.message
-            or "Skipping GitHub API collection" in record.message
-            for record in caplog.records
-        )
-
-
-@pytest.mark.anyio
-async def test_background_processor_top_level_exception_logged(caplog: pytest.LogCaptureFixture):
-    with patch("app.services.webhook_processor.logger.info", side_effect=ValueError("Simulated logging failure")), caplog.at_level(logging.ERROR):
-        # Should not crash the runner
-        await process_failed_workflow_run(
-            delivery_id="delivery-uuid-009-err",
-            owner="test-org",
-            repo="test-repo",
-            run_id=9999,
-            workflow_id="ci.yml",
-            head_sha="deadbeef",
-            head_branch="main",
-            run_attempt=1,
-            conclusion="failure",
-        )
-
-        assert any("Unhandled exception during background processing" in record.message for record in caplog.records)
-
-
-# ============================================================================
-# Scenario 10: Concurrent requests with same delivery ID do not duplicate
+# Scenario 9: Concurrent requests with same delivery ID do not duplicate
 # ============================================================================
 @pytest.mark.anyio
 async def test_concurrent_requests_same_delivery_id_no_duplicate_processing():

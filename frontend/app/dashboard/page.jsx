@@ -2,7 +2,7 @@ import { auth } from "@clerk/nextjs/server";
 import { Suspense } from "react";
 import { Dashboard, DashboardLoading } from "./dashboard";
 
-export const metadata = { title: "Dashboard | CI Postmortem Agent" };
+export const metadata = { title: "Dashboard" };
 
 async function ProtectedDashboard() {
   const { isAuthenticated, redirectToSignIn, sessionId } = await auth();

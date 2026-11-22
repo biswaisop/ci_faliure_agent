@@ -7,8 +7,8 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "border-transparent bg-accent text-[#171d0f] hover:bg-[#e0ffab]",
-        outline: "border-line bg-[#171a17] hover:border-accent hover:bg-[#21271c]",
+        default: "border-transparent bg-accent text-accent-ink hover:bg-accent-hover",
+        outline: "border-line bg-panel hover:border-accent hover:bg-raised",
       },
     },
     defaultVariants: { variant: "default" },

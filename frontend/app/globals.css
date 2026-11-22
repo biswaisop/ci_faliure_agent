@@ -10,6 +10,11 @@
   --color-foreground: #f5f6f0;
   --color-muted: #aeb4a9;
   --color-accent: #d2fa87;
+  --color-accent-hover: #e0ffab;
+  --color-accent-ink: #171d0f;
+  --color-accent-soft: #222c1a;
+  --color-panel: #151915;
+  --color-raised: #1b211a;
   --color-line: #30372d;
   --color-failure: #ffab9d;
 }
@@ -59,7 +64,7 @@ body {
   place-items: center;
   border: 1px solid #486033;
   border-radius: 5px;
-  background: #222c1a;
+  background: var(--color-accent-soft);
   color: var(--color-accent);
 }
 

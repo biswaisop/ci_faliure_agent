@@ -68,11 +68,34 @@ async def verify_user_installations(
 async def read_installation(
     client: httpx.AsyncClient, installation_id: int, headers: dict[str, str],
 ) -> dict | None:
+    """Fetch the installation metadata as the GitHub App, if visible."""
     response = await client.get(f"{GITHUB_API}/app/installations/{installation_id}", headers=headers)
     if response.status_code == 404:
         return None
     response.raise_for_status()
-    return installation_summary(response.json())
+    return response.json()
+
+
+async def read_installation_repositories(token: str) -> list[dict]:
+    """Read every repository accessible to the installation token."""
+    headers = github_headers(token)
+    repositories = []
+    page = 1
+    async with httpx.AsyncClient(timeout=10) as client:
+        while True:
+            response = await client.get(
+                f"{GITHUB_API}/installation/repositories",
+                params={"per_page": 100, "page": page},
+                headers=headers,
+            )
+            response.raise_for_status()
+            page_repositories = response.json()["repositories"]
+            if not isinstance(page_repositories, list):
+                raise TypeError("Invalid GitHub installation repository list")
+            repositories.extend(page_repositories)
+            if "next" not in response.links:
+                return repositories
+            page += 1
 
 
 async def read_installations(installation_ids: list[int]) -> list[dict]:
@@ -86,5 +109,5 @@ async def read_installations(installation_ids: list[int]) -> list[dict]:
         for installation_id in installation_ids:
             installation = await read_installation(client, installation_id, headers)
             if installation is not None:
-                installations.append(installation)
+                installations.append(installation_summary(installation))
     return installations

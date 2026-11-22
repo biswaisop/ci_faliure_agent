@@ -4,9 +4,8 @@ import { RedirectToSignIn, useAuth } from "@clerk/nextjs";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { authorizeGithub, githubRequest } from "./github-api";
-
-const buttonClass = "mt-4 inline-flex min-h-11 items-center rounded-lg bg-[#5455dc] px-4 text-sm font-semibold text-white transition-colors hover:bg-[#494ac6] disabled:opacity-60";
 
 export function GithubCallback() {
   const params = useSearchParams();
@@ -73,33 +72,34 @@ export function GithubCallback() {
 
   return (
     <>
-      <p role="status" className="mt-3 text-sm leading-6 text-[#a1a1aa]">{message}</p>
-      {error && <p role="alert" className="mt-3 text-sm text-[#fca5a5]">{error}</p>}
+      <p role="status" className="mt-3 text-sm leading-6 text-muted">{message}</p>
+      {error && <p role="alert" className="mt-3 text-sm text-failure">{error}</p>}
       {isLoaded && needsVerification && (
-        <button type="button" disabled={busy} className={buttonClass} onClick={verify}>
+        <Button type="button" disabled={busy} className="mt-4" onClick={verify}>
           {busy ? "Opening GitHub…" : "Verify installation"}
-        </button>
+        </Button>
       )}
       {result?.status === "select" && (
         <ul className="mt-4 space-y-2">
           {result.installations.map((installation) => (
             <li key={installation.id}>
-              <button
+              <Button
                 type="button"
+                variant="outline"
                 disabled={busy}
-                className="flex min-h-11 w-full items-center justify-between gap-2 rounded-lg border border-[#37373d] px-3 text-left text-sm hover:bg-[#22222a] disabled:opacity-60"
+                className="w-full justify-between!"
                 onClick={() => link(installation.id)}
               >
-                <span className="break-all">{installation.account}</span>
-                <span className="shrink-0 text-xs text-[#a1a1aa]">
+                <span className="min-w-0 wrap-break-word whitespace-normal text-left">{installation.account}</span>
+                <span className="shrink-0 text-xs text-muted">
                   {installation.target_type === "Organization" ? "Organization" : "Personal"}
                 </span>
-              </button>
+              </Button>
             </li>
           ))}
         </ul>
       )}
-      <Link href="/dashboard" prefetch={false} className="mt-5 block w-fit text-sm text-[#b0b2ff] underline-offset-4 hover:underline">
+      <Link href="/dashboard" prefetch={false} className="mt-5 block w-fit text-sm text-accent underline-offset-4 hover:underline">
         Back to dashboard
       </Link>
     </>

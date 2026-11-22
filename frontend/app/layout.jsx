@@ -4,7 +4,10 @@ import { GeistSans } from "geist/font/sans";
 import "./globals.css";
 
 export const metadata = {
-  title: "AutopCI · Diagnose failed GitHub Actions runs",
+  title: {
+    default: "AutopCI · Diagnose failed GitHub Actions runs",
+    template: "%s | AutopCI",
+  },
   description: "Turn failed pytest runs into a pull request diagnosis with cited evidence and a clear next step.",
 };
 

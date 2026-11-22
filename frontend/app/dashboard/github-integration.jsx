@@ -1,10 +1,11 @@
 "use client";
 
-import { ArrowUpRight, Building2, GitPullRequest, UserRound } from "lucide-react";
+import { ArrowUpRight, Building2, GitFork, GitPullRequest, UserRound } from "lucide-react";
 import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { authorizeGithub, githubRequest } from "./github/github-api";
 
-export function GithubIntegration({ getToken, actionClass }) {
+export function GithubIntegration({ getToken }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [authorizing, setAuthorizing] = useState(false);
@@ -34,71 +35,102 @@ export function GithubIntegration({ getToken, actionClass }) {
   }
 
   return (
-    <section aria-labelledby="github-heading" className="mt-4 rounded-xl border border-[#27272a] bg-[#111114] p-5 sm:p-6">
-      <h2 id="github-heading" className="flex items-center gap-2 text-sm font-semibold">
-        <GitPullRequest size={18} className="text-[#a5a7fc]" aria-hidden="true" /> GitHub integration
-      </h2>
-      <p className="mt-2 max-w-xl text-sm leading-6 text-[#a1a1aa]">
-        Install the GitHub App on your personal account or an organization. Choose which repositories it can access on GitHub.
-      </p>
+    <section id="installations" aria-labelledby="github-heading" className="mt-7 scroll-mt-6 sm:mt-9">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h2 id="github-heading" className="text-lg font-semibold tracking-tight">GitHub installations</h2>
+          <p className="mt-1 text-sm text-muted">Manage the GitHub accounts and organizations linked to AutopCI.</p>
+        </div>
+        {data?.install_url && (
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" disabled={authorizing} onClick={linkExisting}>
+              {authorizing ? "Opening GitHub…" : "Link existing installation"}
+            </Button>
+            <Button asChild>
+              <a href={data.install_url}>
+                <GitFork size={16} aria-hidden="true" />
+                {data.installations.length ? "Install on another account" : "Connect GitHub"}
+                <ArrowUpRight size={15} aria-hidden="true" />
+              </a>
+            </Button>
+          </div>
+        )}
+      </div>
 
-      {!data && !error && <p role="status" className="mt-4 text-sm text-[#a1a1aa]">Checking GitHub connections…</p>}
-      {error && (
-        <div className="mt-4">
-          <p role="alert" className="text-sm text-[#fca5a5]">{error}</p>
-          {!data && (
-            <button
-              type="button"
-              className={`mt-3 ${actionClass}`}
-              onClick={() => {
-                setError("");
-                setRequest((previous) => previous + 1);
-              }}
-            >
-              Retry connection check
-            </button>
-          )}
-        </div>
-      )}
-      {data?.installations.length > 0 && (
-        <ul className="mt-4 divide-y divide-[#27272a] rounded-lg border border-[#27272a]">
-          {data.installations.map((installation) => {
-            const organization = installation.target_type === "Organization";
-            const AccountIcon = organization ? Building2 : UserRound;
-            return (
-              <li key={installation.id} className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-3">
-                <span className="flex min-w-0 items-center gap-3 text-sm">
-                  <AccountIcon size={17} className="shrink-0 text-[#a5a7fc]" aria-hidden="true" />
-                  <span className="break-all font-medium">{installation.account}</span>
-                  <span className="text-xs text-[#a1a1aa]">{organization ? "Organization" : "Personal"}</span>
-                </span>
-                <span className={installation.status === "suspended" ? "text-xs text-[#fca5a5]" : "text-xs text-[#86efac]"}>
-                  {installation.status === "suspended" ? "Suspended" : "Connected"}
-                </span>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      {data?.install_url && (
-        <div className="mt-4 flex flex-wrap gap-2">
-          <a href={data.install_url} className={actionClass}>
-            {data.installations.length ? "Install on another account" : "Connect GitHub"}
-            <ArrowUpRight size={15} aria-hidden="true" />
-          </a>
-          <button
-            type="button"
-            disabled={authorizing}
-            onClick={linkExisting}
-            className={`${actionClass} disabled:opacity-60`}
-          >
-            {authorizing ? "Opening GitHub…" : "Link existing installation"}
-          </button>
-        </div>
-      )}
-      {data && !data.install_url && (
-        <p className="mt-4 text-sm text-[#a1a1aa]">GitHub App setup is incomplete. Contact your workspace administrator.</p>
-      )}
+      <div className="overflow-hidden rounded-md border border-line bg-panel">
+        {error && (
+          <div className="px-4 py-5 sm:px-5">
+            <p role="alert" className="text-sm text-failure">{error}</p>
+            {!data && (
+              <Button
+                type="button"
+                variant="outline"
+                className="mt-3"
+                onClick={() => {
+                  setError("");
+                  setRequest((previous) => previous + 1);
+                }}
+              >
+                Retry connection check
+              </Button>
+            )}
+          </div>
+        )}
+        {!data && !error && <p role="status" className="px-4 py-5 text-sm text-muted sm:px-5">Checking GitHub connections…</p>}
+        {data?.installations.length > 0 && (
+          <table className={`w-full table-fixed text-left text-sm ${error ? "border-t border-line" : ""}`}>
+            <thead className="border-b border-line bg-raised text-xs text-muted">
+              <tr>
+                <th scope="col" className="px-4 py-3 font-medium sm:px-5">Account</th>
+                <th scope="col" className="hidden w-32 px-4 py-3 font-medium sm:table-cell">Type</th>
+                <th scope="col" className="w-32 px-4 py-3 text-right font-medium sm:w-36 sm:px-5">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-line">
+              {data.installations.map((installation) => {
+                const organization = installation.target_type === "Organization";
+                const AccountIcon = organization ? Building2 : UserRound;
+                const type = organization ? "Organization" : "Personal";
+                const suspended = installation.status === "suspended";
+                return (
+                  <tr key={installation.id}>
+                    <th scope="row" className="px-4 py-4 font-medium sm:px-5">
+                      <div className="flex items-center gap-3">
+                        <AccountIcon size={17} className="shrink-0 text-accent" aria-hidden="true" />
+                        <div className="min-w-0 wrap-break-word">
+                          {installation.account}
+                          <p className="mt-0.5 text-xs font-normal text-muted sm:hidden">{type}</p>
+                        </div>
+                      </div>
+                    </th>
+                    <td className="hidden px-4 py-4 text-muted sm:table-cell">{type}</td>
+                    <td className="px-4 py-4 text-right sm:px-5">
+                      <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium ${suspended ? "bg-failure/10 text-failure" : "bg-accent-soft text-accent"}`}>
+                        <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
+                        {suspended ? "Suspended" : "Connected"}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+        {data?.installations.length === 0 && (
+          <div className="px-4 py-10 text-center text-sm sm:py-14">
+            <span className="mx-auto grid size-11 place-items-center rounded-md border border-line bg-accent-soft text-accent">
+              <GitPullRequest size={21} aria-hidden="true" />
+            </span>
+            <p className="mt-4 font-semibold">No GitHub installations yet</p>
+            {data.install_url && (
+              <p className="mx-auto mt-1 max-w-xs leading-6 text-muted">Install the GitHub App or link an existing installation to get started.</p>
+            )}
+          </div>
+        )}
+        {data && !data.install_url && (
+          <p className="border-t border-line px-4 py-4 text-sm text-muted sm:px-5">GitHub App setup is incomplete. Contact your workspace administrator.</p>
+        )}
+      </div>
     </section>
   );
 }

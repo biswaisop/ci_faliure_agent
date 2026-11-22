@@ -1,6 +1,7 @@
-from pymongo import ASCENDING
+from pymongo import ASCENDING, DESCENDING, IndexModel
 
 from app.db.mongodb import MongoDb
+from app.db.repositories.github_repository import FULL_NAME_COLLATION
 
 
 async def setup_indexes() -> None:
@@ -20,6 +21,10 @@ async def setup_indexes() -> None:
         unique=True
     )
     await MongoDb.github_installations().create_index("clerk_user_ids")
+    await MongoDb.github_installations().create_indexes([
+        IndexModel("account.github_account_id"),
+        IndexModel("status"),
+    ])
     await MongoDb.get_collection("github_installation_states").create_index(
         "expires_at", expireAfterSeconds=0,
     )
@@ -29,12 +34,29 @@ async def setup_indexes() -> None:
         "github_repo_id",
         unique=True
     )
+    await MongoDb.github_repositories().create_indexes([
+        IndexModel([("installation_id", ASCENDING), ("is_active", ASCENDING)]),
+        IndexModel("full_name", collation=FULL_NAME_COLLATION),
+    ])
+
+    await MongoDb.get_collection("user_memberships").create_indexes([
+        IndexModel(
+            [("clerk_user_id", ASCENDING), ("resource_type", ASCENDING), ("resource_id", ASCENDING)],
+            unique=True,
+        ),
+        IndexModel([("clerk_user_id", ASCENDING), ("status", ASCENDING)]),
+        IndexModel([("resource_type", ASCENDING), ("resource_id", ASCENDING), ("status", ASCENDING)]),
+    ])
 
     # Webhook deduplication
     await MongoDb.webhook_deliveries().create_index(
         "delivery_id",
         unique=True
     )
+    await MongoDb.webhook_deliveries().create_indexes([
+        IndexModel([("status", ASCENDING), ("received_at", ASCENDING)]),
+        IndexModel([("run_id", ASCENDING), ("run_attempt", ASCENDING)]),
+    ])
 
     # Workflow runs: separate rerun attempts
     await MongoDb.workflow_runs().create_index(
@@ -45,6 +67,14 @@ async def setup_indexes() -> None:
         ],
         unique=True
     )
+    await MongoDb.workflow_runs().create_indexes([
+        IndexModel([("github_repo_id", ASCENDING), ("created_at", DESCENDING)]),
+        IndexModel([
+            ("github_repo_id", ASCENDING), ("workflow_id", ASCENDING),
+            ("head_branch", ASCENDING), ("created_at", DESCENDING),
+        ]),
+        IndexModel("conclusion"),
+    ])
 
     # Slack
     await MongoDb.slack_installations().create_index(

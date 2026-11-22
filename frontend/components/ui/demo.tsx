@@ -1,5 +1,6 @@
 import { GitBranch, GitPullRequest, Terminal } from "lucide-react";
 import { GithubIcon } from "hugeicons-react";
+import { Brand } from "@/components/brand";
 import { Hero } from "@/components/hero";
 import { Navbar, PROJECT_URL } from "@/components/navbar";
 import { Button } from "@/components/ui/button";
@@ -34,7 +35,7 @@ export default function LandingDemo() {
       </main>
       <footer className="site-footer">
         <div className="shell">
-          <span className="brand"><span className="brand-mark"><Terminal aria-hidden="true" size={17} /></span> AutopCI</span>
+          <Brand />
           <a href={PROJECT_URL}>Source on GitHub</a>
         </div>
       </footer>

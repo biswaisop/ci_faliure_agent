@@ -1,246 +1,110 @@
-"""
-GitHub Webhook Ingestion Router.
-
-Receives GitHub webhook events, verifies HMAC-SHA256 signatures, deduplicates
-deliveries using the injected deduplicator dependency, filters for failed CI workflow
-runs, and dispatches background processing.
-"""
+"""Validate signed GitHub deliveries and schedule eligible background work."""
 
 import json
 import logging
-from typing import Any
+from dataclasses import dataclass
+from typing import Annotated, Literal, cast
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from pymongo.errors import PyMongoError
 
-from app.services.deduplicator import DeliveryDeduplicator
+from app.services.deduplicator import DeliveryDeduplicator, MongoDeliveryDeduplicator
 from app.services.gh_auth import verify_signature
-from app.services.webhook_processor import process_failed_workflow_run
-from dependencies import get_deduplicator
+from app.services.github_webhook_event import (
+    EVENT_ACTIONS,
+    GitHubEvent,
+    GitHubWebhook,
+    parse_webhook,
+)
+from app.services.webhook_processor import (
+    process_failed_workflow_run,
+    process_installation_event,
+)
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/github", tags=["webhook"])
+
+
+@dataclass(frozen=True)
+class VerifiedDelivery:
+    delivery_id: str
+    response: Literal["pong", "ignored", "accepted"]
+    event: GitHubWebhook | None = None
+
+
+async def read_github_webhook(request: Request) -> VerifiedDelivery:
+    """Verify the raw payload and validate event-specific data before any database write."""
+    delivery_id = request.headers.get("X-GitHub-Delivery")
+    if not delivery_id:
+        raise HTTPException(status_code=400, detail="Missing X-GitHub-Delivery header")
+    if len(delivery_id) > 128 or not all(char.isascii() and (char.isalnum() or char in "-_") for char in delivery_id):
+        raise HTTPException(status_code=400, detail="Invalid X-GitHub-Delivery header")
+
+    body = await request.body()
+    if not verify_signature(body, request.headers.get("X-Hub-Signature-256", "")):
+        logger.warning("Invalid GitHub webhook signature", extra={"delivery_id": delivery_id})
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+
+    event_type = request.headers.get("X-GitHub-Event")
+    if not event_type:
+        raise HTTPException(status_code=400, detail="Missing X-GitHub-Event header")
+    if event_type == "ping":
+        return VerifiedDelivery(delivery_id, "pong")
+    if event_type not in EVENT_ACTIONS:
+        return VerifiedDelivery(delivery_id, "ignored")
+
+    try:
+        payload = json.loads(body)
+    except (ValueError, RecursionError) as exc:
+        raise HTTPException(status_code=400, detail="Malformed JSON payload") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Payload must be a JSON object")
+
+    try:
+        event = parse_webhook(cast(GitHubEvent, event_type), payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Malformed payload: invalid GitHub event metadata") from exc
+    if event is None:
+        return VerifiedDelivery(delivery_id, "ignored")
+    return VerifiedDelivery(delivery_id, "accepted", event)
+
+
+VerifiedWebhook = Annotated[VerifiedDelivery, Depends(read_github_webhook)]
+
+
+async def get_deduplicator(webhook: VerifiedWebhook) -> DeliveryDeduplicator | None:
+    """Bind validated metadata to the recorder while preserving the single-argument interface."""
+    return MongoDeliveryDeduplicator(webhook.event.metadata) if webhook.event else None
+
 
 @router.post("/webhook")
 async def github_webhooks(
-    request: Request,
     background_tasks: BackgroundTasks,
-    deduplicator: DeliveryDeduplicator = Depends(get_deduplicator),
-) -> dict[str, Any]:
-    """
-    Handle GitHub webhook deliveries.
+    webhook: VerifiedWebhook,
+    deduplicator: Annotated[DeliveryDeduplicator | None, Depends(get_deduplicator)],
+) -> dict[str, str]:
+    """Record receipt atomically before scheduling any background task."""
+    event = webhook.event
+    if event is None:
+        return {"status": webhook.response}
+    delivery_id = webhook.delivery_id
+    if deduplicator is None:
+        raise HTTPException(status_code=503, detail="Could not record GitHub delivery")
 
-    1. Validate delivery ID.
-    2. Verify webhook signature.
-    3. Validate event type.
-    4. Parse JSON payload.
-    5. Filter failed workflow runs.
-    6. Deduplicate delivery ID.
-    7. Schedule background processing.
-    8. Return HTTP 200.
-    """
-
-    # 1. Extract delivery ID
-    delivery_id = request.headers.get("X-GitHub-Delivery")
-
-    if not delivery_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing X-GitHub-Delivery header",
-        )
-
-    # 2. Read raw request body
-    body = await request.body()
-
-    signature = request.headers.get("X-Hub-Signature-256")
-
-    if not signature or not verify_signature(body, signature):
-        logger.warning(
-            "Invalid webhook signature: delivery_id=%s",
-            delivery_id,
-        )
-
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid webhook signature",
-        )
-
-    # 3. Validate event type
-    event = request.headers.get("X-GitHub-Event")
-
-    if not event:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing X-GitHub-Event header",
-        )
-
-    if event == "ping":
-        logger.info(
-            "GitHub ping received: delivery_id=%s",
-            delivery_id,
-        )
-        return {"status": "pong"}
-
-    if event != "workflow_run":
-        logger.info(
-            "Ignoring GitHub event=%s delivery_id=%s",
-            event,
-            delivery_id,
-        )
-        return {"status": "ignored"}
-
-    # 4. Parse JSON only AFTER signature verification
     try:
-        payload = json.loads(body)
-
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        logger.warning(
-            "Malformed JSON payload: delivery_id=%s",
-            delivery_id,
+        accepted = await deduplicator.acquire_or_record(delivery_id)
+    except (PyMongoError, RuntimeError) as exc:
+        logger.error(
+            "Could not record GitHub delivery",
+            extra={"delivery_id": delivery_id, **event.metadata.model_dump()},
         )
+        raise HTTPException(status_code=503, detail="Could not record GitHub delivery") from exc
 
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Malformed JSON payload",
-        )
+    if not accepted:
+        return {"status": "duplicate", "delivery_id": delivery_id}
 
-    if not isinstance(payload, dict):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Payload must be a JSON object",
-        )
-
-    # 5. Extract workflow run information
-    action = payload.get("action")
-    workflow_run = payload.get("workflow_run")
-
-    if not isinstance(workflow_run, dict):
-        workflow_run = {}
-
-    conclusion = workflow_run.get("conclusion")
-
-    logger.info(
-        "GitHub event=%s action=%s conclusion=%s delivery_id=%s",
-        event,
-        action,
-        conclusion,
-        delivery_id,
-    )
-
-    # Only process completed, failed workflow runs
-    if action != "completed" or conclusion != "failure":
-        logger.info(
-            "Ignoring workflow run: delivery_id=%s",
-            delivery_id,
-        )
-
-        return {"status": "ignored"}
-
-    # 6. Validate repository information
-    repository = payload.get("repository")
-
-    if not isinstance(repository, dict):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing repository information",
-        )
-
-    repo_name = repository.get("name")
-    owner_info = repository.get("owner")
-
-    owner = (
-        owner_info.get("login")
-        if isinstance(owner_info, dict)
-        else None
-    )
-
-    # Fallback to repository.full_name
-    if not owner or not repo_name:
-        full_name = repository.get("full_name")
-
-        if isinstance(full_name, str) and "/" in full_name:
-            owner, repo_name = full_name.split("/", 1)
-
-    # 7. Extract run metadata
-    run_id = workflow_run.get("id")
-    workflow_id = workflow_run.get("workflow_id")
-    head_sha = workflow_run.get("head_sha")
-    head_branch = workflow_run.get("head_branch")
-    run_attempt = workflow_run.get("run_attempt", 1)
-
-    if (
-        not owner
-        or not repo_name
-        or not run_id
-        or not workflow_id
-        or not head_sha
-        or not isinstance(run_id, int)
-        or isinstance(run_id, bool)
-        or not isinstance(workflow_id, int)
-        or isinstance(workflow_id, bool)
-        or not isinstance(head_sha, str)
-        or not isinstance(run_attempt, int)
-        or isinstance(run_attempt, bool)
-        or run_attempt < 1
-    ):
-        logger.warning(
-            "Invalid workflow metadata: delivery_id=%s",
-            delivery_id,
-        )
-
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing or invalid workflow run identifiers",
-        )
-
-    # Installation ID from webhook payload
-    installation = payload.get("installation")
-
-    installation_id = (
-        installation.get("id")
-        if isinstance(installation, dict)
-        else None
-    )
-
-    # 8. Deduplicate after signature and payload validation
-    is_new = await deduplicator.acquire_or_record(delivery_id)
-
-    if not is_new:
-        logger.info(
-            "Duplicate webhook ignored: delivery_id=%s",
-            delivery_id,
-        )
-
-        return {
-            "status": "duplicate",
-            "delivery_id": delivery_id,
-        }
-
-    # 9. Schedule background processing
-    background_tasks.add_task(
-        process_failed_workflow_run,
-        delivery_id=delivery_id,
-        owner=owner,
-        repo=repo_name,
-        run_id=run_id,
-        workflow_id=workflow_id,
-        head_sha=head_sha,
-        head_branch=head_branch,
-        run_attempt=run_attempt,
-        conclusion=conclusion,
-        installation_id=installation_id,
-    )
-
-    logger.warning(
-        "Background task scheduled: repo=%s/%s run_id=%s delivery_id=%s",
-        owner,
-        repo_name,
-        run_id,
-        delivery_id,
-    )
-
-    # 10. Acknowledge immediately
-    return {
-        "status": "accepted",
-        "delivery_id": delivery_id,
-    }
+    if event.run is not None:
+        background_tasks.add_task(process_failed_workflow_run, delivery_id, event)
+    else:
+        background_tasks.add_task(process_installation_event, delivery_id, event)
+    return {"status": "accepted", "delivery_id": delivery_id}

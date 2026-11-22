@@ -1,15 +1,13 @@
-import hmac
 import hashlib
-import json
-
-import time 
-import jwt
-import httpx
-
+import hmac
+import time
 from pathlib import Path
 
+import httpx
+import jwt
 
 from config import settings
+
 
 def verify_signature(payload: bytes, signature: str) -> bool:
     """Verify that the incoming GitHub webhook payload matches the HMAC-SHA256 signature."""
@@ -57,10 +55,6 @@ async def get_installation_id(owner: str, repo: str) -> int:
 
     async with httpx.AsyncClient() as client:
         response = await client.get(url, headers=headers)
-        if response.status_code != 200:
-            print("GitHub Error:", response.status_code)
-            print("Response:", response.text)
-
         response.raise_for_status()
         return response.json()["id"]
 
@@ -81,6 +75,6 @@ async def get_installation_token(installation_id: int) -> str:
     async with httpx.AsyncClient() as client:
         response = await client.post(url, headers=headers)
         response.raise_for_status()
-        return response.json()["token"]
+        return response.json().get("token") or ""
 
 
