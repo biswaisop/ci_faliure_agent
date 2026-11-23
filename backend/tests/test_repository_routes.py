@@ -10,6 +10,59 @@ from app.main import app
 from app.routes import repositories
 
 
+def test_full_job_log_streams_only_for_the_authorized_run_attempt(monkeypatch):
+    repo = SimpleNamespace(installation_id=8, name="ci", owner=SimpleNamespace(login="team"))
+    run = SimpleNamespace(installation_id=8, failed_jobs=[SimpleNamespace(job_id=42)])
+    authorization = SimpleNamespace(get_authorized_repository=AsyncMock(return_value=repo))
+    runs = SimpleNamespace(get_run=AsyncMock(return_value=run))
+    mint_token = AsyncMock(return_value="test-token")
+    monkeypatch.setitem(app.dependency_overrides, repositories.get_authorization, lambda: authorization)
+    monkeypatch.setitem(app.dependency_overrides, repositories.get_runs, lambda: runs)
+    monkeypatch.setattr(repositories, "get_installation_token", mint_token)
+
+    started = False
+    expired = False
+    middle = b"output\n" * 320_000
+
+    async def chunks():
+        assert started
+        yield b"setup\n"
+        yield middle
+        yield b"TypeError: failed\n"
+
+    @asynccontextmanager
+    async def open_log(owner, name, job_id, token):
+        nonlocal started
+        assert (owner, name, job_id, token) == ("team", "ci", 42, "test-token")
+        started = True
+        try:
+            yield None if expired else SimpleNamespace(aiter_bytes=chunks)
+        finally:
+            started = False
+
+    monkeypatch.setattr(repositories, "get_github_collector", lambda: SimpleNamespace(open_job_log=open_log))
+    client = TestClient(app)
+    path = "/api/github/repositories/7/runs/9/attempts/2/jobs"
+    assert client.get(f"{path}/42/log").status_code == 401
+    monkeypatch.setitem(app.dependency_overrides, current_clerk_user_id, lambda: "user_1")
+    assert client.get(f"{path}/43/log").status_code == 404
+    run.installation_id = 99
+    assert client.get(f"{path}/42/log").status_code == 404
+    mint_token.assert_not_awaited()
+
+    run.installation_id = 8
+    response = client.get(f"{path}/42/log")
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["content-type"].startswith("text/plain")
+    assert response.content == b"setup\n" + middle + b"TypeError: failed\n"
+    assert not started
+    assert runs.get_run.await_args.args[0].run_attempt == 2
+
+    expired = True
+    assert client.get(f"{path}/42/log").status_code == 404
+
+
 def test_repository_pages_are_scoped_to_the_selected_installation(monkeypatch):
     owner = SimpleNamespace(login="team")
     authorized = [SimpleNamespace(github_repo_id=1, installation_id=8, name="personal", owner=owner)]
@@ -107,3 +160,4 @@ def test_workflow_reads_use_repository_scope_and_keep_attempts_separate(monkeypa
     response = client.get(detail)
     assert response.json()["diagnosis"]["evidence_ids"] == [f"log:{job_id}"]
     assert "internal-only" not in response.text
+from contextlib import asynccontextmanager

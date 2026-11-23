@@ -1,8 +1,13 @@
 from asyncio import gather
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack
 from datetime import UTC
 from typing import Annotated
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
+from fastapi.responses import StreamingResponse
+from jwt import InvalidKeyError
 
 from app.core.clerk_auth import current_clerk_user_id
 from app.db.models.github_repository import GitHubRepository
@@ -17,7 +22,9 @@ from app.db.repositories.membership_repository import MembershipRepository
 from app.db.repositories.user_repositories import UserRepository
 from app.db.repositories.workflow_run_repository import WorkflowRunRepository
 from app.schema.diagnosis import DiagnosisResult
+from app.services.gh_auth import get_installation_token
 from app.services.github_authorization_service import GitHubAuthorizationService
+from dependencies import get_github_collector
 
 
 def prevent_caching(response: Response) -> None:
@@ -105,11 +112,10 @@ async def list_runs(
     return {"repository": repository_summary(repo), "runs": await recent_runs(repo, runs, investigations, limit)}
 
 
-@router.get("/{repo_id}/runs/{run_id}/attempts/{attempt}")
-async def read_run(
+async def get_authorized_run(
     repo_id: GitHubPathId, run_id: GitHubPathId, attempt: GitHubPathId,
-    user_id: ClerkUser, authorization: Authorization, runs: Runs, investigations: Investigations,
-):
+    user_id: ClerkUser, authorization: Authorization, runs: Runs,
+) -> tuple[GitHubRepository, WorkflowRun]:
     repo = await authorization.get_authorized_repository(user_id, repo_id)
     if repo is None:
         raise HTTPException(status_code=404, detail="Run unavailable.")
@@ -119,6 +125,15 @@ async def read_run(
     )
     if run is None or run.installation_id != repo.installation_id:
         raise HTTPException(status_code=404, detail="Run unavailable.")
+    return repo, run
+
+
+AuthorizedRun = Annotated[tuple[GitHubRepository, WorkflowRun], Depends(get_authorized_run)]
+
+
+@router.get("/{repo_id}/runs/{run_id}/attempts/{attempt}")
+async def read_run(authorized_run: AuthorizedRun, investigations: Investigations):
+    repo, run = authorized_run
 
     investigation = await investigations.get(run)
     status = investigation.get("status") if investigation else None
@@ -144,3 +159,31 @@ async def read_run(
             "files_limit_reached": context.files_limit_reached if context else False,
         },
     }
+
+
+async def open_failed_job_log(job_id: GitHubPathId, authorized_run: AuthorizedRun) -> AsyncIterator[httpx.Response]:
+    repo, run = authorized_run
+    if not any(job.job_id == job_id for job in run.failed_jobs):
+        raise HTTPException(status_code=404, detail="Failed job unavailable.")
+
+    async with AsyncExitStack() as stack:
+        try:
+            token = await get_installation_token(repo.installation_id)
+            if not token:
+                raise HTTPException(status_code=502, detail="Could not retrieve the log from GitHub.")
+            log = await stack.enter_async_context(
+                get_github_collector().open_job_log(repo.owner.login, repo.name, job_id, token),
+            )
+        except (httpx.HTTPError, OSError, ValueError, InvalidKeyError):
+            raise HTTPException(status_code=502, detail="Could not retrieve the log from GitHub.") from None
+        if log is None:
+            raise HTTPException(status_code=404, detail="GitHub no longer has this job log.")
+        yield log
+
+
+@router.get("/{repo_id}/runs/{run_id}/attempts/{attempt}/jobs/{job_id}/log")
+async def read_failed_job_log(log: Annotated[httpx.Response, Depends(open_failed_job_log, scope="request")]):
+    return StreamingResponse(
+        log.aiter_bytes(), media_type="text/plain",
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )
