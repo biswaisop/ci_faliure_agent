@@ -4,6 +4,7 @@ node_modules/
 .vscode/
 secrets/
 concept.md
+report.md
 
 # Python bytecode and caches
 __pycache__/

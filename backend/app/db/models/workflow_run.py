@@ -5,7 +5,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.db.models.github_installation import GitHubId
 from app.schema.failure_packet import FailurePacket
-
+from app.schema.investigation_context import InvestigationContext
 
 CollectionStatus = Literal["pending", "collecting", "completed", "failed"]
 LogStatus = Literal["not_collected", "available", "missing", "expired", "failed"]
@@ -53,6 +53,7 @@ class EvidenceUpdate(BaseModel):
     failure_packets: list[FailurePacket] | None = None
     base_sha: ShortText | None = None
     diff_summary: str | None = Field(default=None, max_length=8_000)
+    investigation_context: InvestigationContext | None = None
 
 
 class RunEvidence(EvidenceUpdate):

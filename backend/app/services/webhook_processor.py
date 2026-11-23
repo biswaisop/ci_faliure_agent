@@ -1,5 +1,7 @@
 """Background work for accepted GitHub deliveries and their recorded processing status."""
 
+from app.services.investigation_context_builder import build_investigation_context
+from httpx import head
 import logging
 from collections.abc import Awaitable, Callable
 
@@ -238,12 +240,74 @@ async def collect_workflow_run(
             )
 
         # 11. Persist all failure packets
+        # await runs.update_evidence(
+        #     run,
+        #     EvidenceUpdate(
+        #         failure_packets=failure_packets
+        #     ),
+        # )
+
+        last_success = await collector.get_last_passing_run(
+            owner=owner,
+            repo=repo_name,
+            workflow_id=run.workflow_id,
+            branch=run.head_branch,
+            before_run=run.run_id,
+            token=token,
+        )
+
+        base_sha = (
+            last_success["head_sha"]
+            if last_success
+            else None
+        )
+
+        diff = None
+
+        if base_sha and base_sha != run.head_sha:
+            diff = await collector.get_commit_diff(
+                owner=owner,
+                repo=repo_name,
+                base=base_sha,
+                head=run.head_sha,
+                token=token,
+            )
+
+        context = build_investigation_context(
+            github_repo_id=repo.github_repo_id,
+            run_id = run.run_id,
+            run_attempt = run.run_attempt,
+            workflow_id=run.workflow_id,
+            head_sha=run.head_sha,
+            head_branch=run.head_branch,
+            failure_packets=failure_packets,
+            base_sha=base_sha,
+            diff=diff,
+        )
+
+        logger.info(
+            "Investigation context built: run_id=%s changed_files=%d correlations=%d",
+            run.run_id,
+            len(context.changed_files),
+            len(context.correlations),
+        )
+
         await runs.update_evidence(
             run,
             EvidenceUpdate(
-                failure_packets=failure_packets
+                failure_packets=failure_packets,
+                investigation_context=context.model_dump(mode="json")
             ),
         )
+
+        await runs.update_collection_status(
+            run,
+            "completed",
+        )
+
+
+
+
 
         logger.warning(
             "Evidence stored successfully: "
