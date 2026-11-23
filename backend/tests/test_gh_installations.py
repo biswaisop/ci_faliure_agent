@@ -101,6 +101,11 @@ def test_installation_connection_is_verified_and_scoped_to_the_clerk_user(monkey
     monkeypatch.setattr(gh_installations.MongoDb, "get_collection", lambda name: state_collection)
     monkeypatch.setattr(gh_installations.MongoDb, "github_installations", lambda: collection)
     monkeypatch.setattr(github, "generate_app_jwt", lambda: "test-app-jwt")
+    monkeypatch.setattr(gh_installations, "ensure_installation_synced", AsyncMock())
+    grant_access = AsyncMock()
+    monkeypatch.setattr(gh_installations, "MembershipRepository", lambda: SimpleNamespace(
+        sync_github_repository_grants=grant_access,
+    ))
 
     personal = github_installation(14, "octocat", "User")
     organization = github_installation(25, "example-org", "Organization")
@@ -117,6 +122,13 @@ def test_installation_connection_is_verified_and_scoped_to_the_clerk_user(monkey
         if request.url.path == "/user/installations":
             assert request.headers["Authorization"] == "Bearer test-user-token"
             return httpx.Response(200, json={"installations": authorized_installations})
+        if request.url.path.startswith("/user/installations/"):
+            assert request.headers["Authorization"] == "Bearer test-user-token"
+            _, _, _, installation_id, resource = request.url.path.split("/")
+            assert resource == "repositories"
+            page = int(request.url.params["page"])
+            headers = {"Link": '<https://api.github.com/?page=2>; rel="next"'} if page == 1 else {}
+            return httpx.Response(200, headers=headers, json={"repositories": [{"id": int(installation_id) * 100 + page}]})
         assert request.headers["Authorization"] == "Bearer test-app-jwt"
         installation = app_installations.get(int(request.url.path.rsplit("/", 1)[1]))
         return httpx.Response(200, json=installation) if installation else httpx.Response(404)
@@ -153,11 +165,15 @@ def test_installation_connection_is_verified_and_scoped_to_the_clerk_user(monkey
 
     existing = client.post(f"{base}/complete", json=start({})).json()
     assert existing["status"] == "select"
+    assert all("repository_ids" not in item for item in existing["installations"])
     assert client.post(f"{base}/link", json={"state": existing["state"], "installation_id": 90}).status_code == 400
     selected = {"state": existing["state"], "installation_id": 25}
     assert client.post(f"{base}/link", json=selected).json() == {"status": "connected"}
     assert client.post(f"{base}/link", json=selected).status_code == 400
     assert links == {14: {"user_first"}, 25: {"user_first"}}
+    assert [call.args for call in grant_access.await_args_list] == [
+        ("user_first", 14, [1401, 1402]), ("user_first", 25, [2501, 2502]),
+    ]
 
     organization["suspended_at"] = "2026-11-22T12:00:00Z"
     app_installations.pop(14)

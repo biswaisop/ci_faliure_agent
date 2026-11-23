@@ -92,23 +92,17 @@ async def setup_indexes() -> None:
     )
 
     # Investigations
-    await MongoDb.investigations().create_index(
-        [
-            ("github_repo_id", ASCENDING),
-            ("run_id", ASCENDING),
-            ("run_attempt", ASCENDING),
-        ]
-    )
-
     await MongoDb.agent_executions().create_index(
         "investigation_id"
     )
 
-    await MongoDb.investigations().create_index(
-    [
-        ("github_repo_id", 1),
-        ("run_id", 1),
-        ("run_attempt", 1),
-    ],
-    unique=True,
-)
+    investigations = MongoDb.investigations()
+    index_name = "github_repo_id_1_run_id_1_run_attempt_1"
+    existing = (await investigations.index_information()).get(index_name)
+    if existing and not existing.get("unique"):
+        index_name = "unique_investigation_attempt"
+    await investigations.create_index(
+        [("github_repo_id", ASCENDING), ("run_id", ASCENDING), ("run_attempt", ASCENDING)],
+        name=index_name,
+        unique=True,
+    )

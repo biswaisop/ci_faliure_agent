@@ -1,11 +1,11 @@
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.schema.diagnosis import DiagnosisResult
 
 
 def now_utc() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class InvestigationRepository:
@@ -19,6 +19,30 @@ class InvestigationRepository:
             "run_id": context.run_id,
             "run_attempt": context.run_attempt,
         }
+
+    async def get(self, run) -> dict | None:
+        return await self.collection.find_one(self._key(run), {"status": 1, "diagnosis": 1})
+
+    async def list_statuses(self, github_repo_id: int, runs) -> dict:
+        if not runs:
+            return {}
+        query = {
+            "github_repo_id": github_repo_id,
+            "$or": [{"run_id": run.run_id, "run_attempt": run.run_attempt} for run in runs],
+        }
+        projection = {"run_id": 1, "run_attempt": 1, "status": 1}
+        return {
+            (row["run_id"], row["run_attempt"]): row["status"]
+            async for row in self.collection.find(query, projection)
+        }
+
+    async def mark_pending(self, run) -> None:
+        now = now_utc()
+        await self.collection.update_one(
+            self._key(run),
+            {"$setOnInsert": {"status": "pending", "created_at": now, "updated_at": now}},
+            upsert=True,
+        )
 
     async def mark_running(self, context) -> None:
         await self.collection.update_one(

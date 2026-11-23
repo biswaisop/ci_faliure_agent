@@ -4,43 +4,39 @@ Background work for accepted GitHub deliveries and their recorded processing sta
 
 import logging
 from collections.abc import Awaitable, Callable
-from app.db.mongodb import MongoDb
 
+from pymongo.errors import PyMongoError
 
 from app.db.models.workflow_run import (
     EvidenceUpdate,
     FailedJob,
     WorkflowRunMetadata,
 )
+from app.db.mongodb import MongoDb
 from app.db.repositories.github_installation_repository import (
     GitHubInstallationRepository,
 )
 from app.db.repositories.github_repository import GitHubRepositoryRepository
+from app.db.repositories.investigation_repository import (
+    InvestigationRepository,
+)
 from app.db.repositories.webhook_delivery_repository import WebhookDeliveryRepository
 from app.db.repositories.workflow_run_repository import (
     WorkflowRunInstallationConflict,
     WorkflowRunRepository,
 )
-
-from app.db.repositories.investigation_repository import (
-    InvestigationRepository,
-)
-from app.services.investigation_service import (
-    InvestigationService,
-)
-
+from app.services.failure_classifier import classify_failure
 from app.services.gh_auth import get_installation_id, get_installation_token
 from app.services.gh_collector import GitHubCollector
 from app.services.github_sync_service import GitHubSyncService
 from app.services.github_webhook_event import GitHubWebhook
 from app.services.investigation_context_builder import build_investigation_context
+from app.services.investigation_service import (
+    InvestigationService,
+)
 from app.services.log_reducer import reduce_job_log
-from app.services.failure_classifier import classify_failure
-from app.services.llm import llm
-
 from app.services.webhook_errors import WebhookProcessingError, processing_error
 from dependencies import get_github_collector
-from pymongo.errors import PyMongoError
 
 logger = logging.getLogger(__name__)
 
@@ -277,63 +273,21 @@ async def collect_workflow_run(
             ),
         )
 
-        # 12. Mark evidence collection as completed
+        investigations = InvestigationRepository(MongoDb.investigations())
+        try:
+            await investigations.mark_pending(run)
+        except PyMongoError:
+            logger.exception("Could not queue investigation for run_id=%s", run.run_id)
+
         await runs.update_collection_status(run, "completed")
 
-        # investigation_repository = InvestigationRepository(
-        #     MongoDb.investigations()
-        # )
-
-        # service = InvestigationService(
-        #     repository=investigation_repository,
-        #     llm=llm,  # Inject your configured LangChain chat model
-        # )
-
-        # try:
-        #     diagnosis = await service.investigate(
-        #         context=context,
-        #         classification=classification,
-        #     )
-
-        #     logger.info(
-        #         "Diagnosis generated: run_id=%s summary=%s",
-        #         run.run_id,
-        #         diagnosis.summary,
-        #     )
-
-        # except Exception:
-        #     # Preserve the successful evidence collection status.
-        #     # InvestigationService records its own failure.
-        #     logger.exception(
-        #         "Diagnosis unavailable for run_id=%s",
-        #         run.run_id,
-        #     )
-
-        investigation_service = InvestigationService(
-            repository=InvestigationRepository(
-                MongoDb.investigations()
-            ),
-            llm = llm
-        )
-
         try:
-            diagnosis = await investigation_service.investigate(
+            await InvestigationService(investigations).investigate(
                 context=context,
                 classification=classification,
             )
-
-            logger.info(
-                "Investigation completed: run_id=%s "
-                "root_cause=%s",
-                run.run_id,
-                diagnosis.root_cause,
-            )
-
-        except Exception:
-            logger.exception(
-                "LLM investigation failed for run_id=%s",
-                run.run_id,
-            )
+        except Exception:  # noqa: BLE001 - the service persists investigation failures independently.
+            logger.error("Investigation unavailable for run_id=%s", run.run_id)
 
         logger.info(
             "Workflow evidence collection completed: run_id=%s attempt=%s packets=%d",
@@ -362,11 +316,6 @@ async def collect_workflow_run(
                 "Could not record workflow collection failure: run_id=%s",
                 run.run_id,
             )
-        logger.exception(
-            "Workflow collection failed: run_id=%s attempt=%s",
-            run.run_id,
-            run.run_attempt,
-        )
         raise
 
 

@@ -4,6 +4,9 @@ import logging
 from app.agent.investigation_agent import (
     run_investigation,
 )
+from app.db.repositories.investigation_repository import (
+    InvestigationRepository,
+)
 from app.schema.diagnosis import DiagnosisResult
 from app.schema.failure_classification import (
     FailureClassification,
@@ -11,10 +14,7 @@ from app.schema.failure_classification import (
 from app.schema.investigation_context import (
     InvestigationContext,
 )
-from app.db.repositories.investigation_repository import (
-    InvestigationRepository,
-)
-
+from app.services.llm import get_llm
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ class InvestigationService:
     def __init__(
         self,
         repository: InvestigationRepository,
-        llm,
+        llm=None,
     ):
         self.repository = repository
         self.llm = llm
@@ -35,13 +35,12 @@ class InvestigationService:
         classification: FailureClassification,
     ) -> DiagnosisResult:
 
-        await self.repository.mark_running(context)
-
         try:
+            await self.repository.mark_running(context)
             diagnosis = await run_investigation(
                 context=context,
                 classification=classification,
-                llm=self.llm,
+                llm=self.llm if self.llm is not None else get_llm(),
             )
 
             await self.repository.save_diagnosis(

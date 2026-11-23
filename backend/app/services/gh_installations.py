@@ -61,8 +61,27 @@ async def verify_user_installations(
                 and (installation_id is None or item["id"] == installation_id)
             )
             if "next" not in response.links or (installation_id is not None and installations):
-                return installations
+                break
             page += 1
+
+        for installation in installations:
+            installation["repository_ids"] = await read_user_repository_ids(client, token, installation["id"])
+        return installations
+
+
+async def read_user_repository_ids(client: httpx.AsyncClient, token: str, installation_id: int) -> list[int]:
+    repository_ids = []
+    page = 1
+    while True:
+        response = await client.get(
+            f"{GITHUB_API}/user/installations/{installation_id}/repositories",
+            params={"per_page": 100, "page": page}, headers=github_headers(token),
+        )
+        response.raise_for_status()
+        repository_ids.extend(repository["id"] for repository in response.json()["repositories"])
+        if "next" not in response.links:
+            return repository_ids
+        page += 1
 
 
 async def read_installation(

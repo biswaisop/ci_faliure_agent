@@ -4,9 +4,9 @@ from typing import Annotated, Literal
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.db.models.github_installation import GitHubId
+from app.schema.failure_classification import FailureClassification
 from app.schema.failure_packet import FailurePacket
 from app.schema.investigation_context import InvestigationContext
-from app.schema.failure_classification import FailureClassification
 
 CollectionStatus = Literal["pending", "collecting", "completed", "failed"]
 LogStatus = Literal["not_collected", "available", "missing", "expired", "failed"]
@@ -22,6 +22,7 @@ class WorkflowRunKey(BaseModel):
 class WorkflowRunMetadata(WorkflowRunKey):
     installation_id: GitHubId | None = None
     workflow_id: GitHubId
+    workflow_name: ShortText | None = None
     run_number: GitHubId | None = None
     head_sha: ShortText
     head_branch: ShortText | None = None

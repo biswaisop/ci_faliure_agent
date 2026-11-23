@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { apiFetch } from "../../lib/api";
 import { Button } from "@/components/ui/button";
 import { GithubIntegration } from "./github-integration";
+import { Repositories } from "./repositories";
 
 const retryDelays = [1000, 2000, 4000];
 
@@ -81,6 +82,7 @@ function Workspace({ user, getToken }) {
         <h1 className="text-3xl font-semibold tracking-[-0.045em] sm:text-4xl">Workspace overview</h1>
         <p className="mt-2 max-w-xl text-sm leading-6 text-muted">Connect GitHub repositories to investigate failed GitHub Actions workflows.</p>
       </header>
+      <Repositories />
       <GithubIntegration getToken={getToken} />
 
       <section id="account" aria-labelledby="profile-heading" className="mt-10 scroll-mt-6 sm:mt-12">

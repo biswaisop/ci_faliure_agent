@@ -16,7 +16,14 @@ from pymongo.errors import DuplicateKeyError
 
 from app.core.clerk_auth import current_clerk_user_id
 from app.db.mongodb import MongoDb
+from app.db.repositories.github_installation_repository import (
+    GitHubInstallationRepository,
+)
+from app.db.repositories.github_repository import GitHubRepositoryRepository
+from app.db.repositories.membership_repository import MembershipRepository
 from app.services.gh_installations import read_installations, verify_user_installations
+from app.services.github_sync_service import GitHubSyncService
+from app.services.webhook_errors import WebhookProcessingError
 from config import settings
 
 router = APIRouter(prefix="/api/github/installations", tags=["github-installations"])
@@ -124,13 +131,17 @@ async def complete_installation(body: CompleteInstallation, user_id: ClerkUser):
             "clerk_user_id": user_id,
             "purpose": "select",
             "installation_ids": [item["id"] for item in verified],
+            "repository_scopes": {str(item["id"]): item["repository_ids"] for item in verified},
             "expires_at": datetime.now(UTC) + timedelta(minutes=10),
         })
-        return {"status": "select", "state": state, "installations": verified}
+        return {
+            "status": "select", "state": state,
+            "installations": [{key: value for key, value in item.items() if key != "repository_ids"} for item in verified],
+        }
     if not verified:
         raise HTTPException(status_code=403, detail="This GitHub account cannot access the installation.")
 
-    await save_installation(user_id, installation_id)
+    await save_installation(user_id, installation_id, verified[0]["repository_ids"])
     return {"status": "connected"}
 
 
@@ -145,11 +156,16 @@ async def link_installation(body: LinkInstallation, user_id: ClerkUser):
     })
     if state is None:
         raise HTTPException(status_code=400, detail="GitHub installation selection expired or was already used.")
-    await save_installation(user_id, body.installation_id)
+    scope = state.get("repository_scopes", {}).get(str(body.installation_id))
+    if scope is None:
+        raise HTTPException(status_code=400, detail="Restart GitHub authorization to verify repository access.")
+    await save_installation(user_id, body.installation_id, scope)
     return {"status": "connected"}
 
 
-async def save_installation(user_id: str, installation_id: int) -> None:
+async def save_installation(user_id: str, installation_id: int, repository_ids: list[int]) -> None:
+    await ensure_installation_synced(installation_id)
+    await MembershipRepository().sync_github_repository_grants(user_id, installation_id, repository_ids)
     installations = MongoDb.github_installations()
     selector = {"installation_id": installation_id}
     update = {"$addToSet": {"clerk_user_ids": user_id}}
@@ -157,3 +173,18 @@ async def save_installation(user_id: str, installation_id: int) -> None:
         await installations.update_one(selector, update, upsert=True)
     except DuplicateKeyError:
         await installations.update_one(selector, update)
+
+
+async def ensure_installation_synced(installation_id: int) -> None:
+    installations = GitHubInstallationRepository()
+    installation = await installations.get_by_installation_id(installation_id)
+    if (
+        installation and installation.status == "active" and installation.repository_sync_version is not None
+        and installation.repository_sync_version == installation.sync_version
+    ):
+        return
+    try:
+        await GitHubSyncService(installations, GitHubRepositoryRepository()).reconcile_installation(installation_id)
+    except (httpx.HTTPError, OSError, InvalidKeyError, ValueError, KeyError, WebhookProcessingError) as exc:
+        logger.warning("Could not synchronize the GitHub installation (%s)", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="Could not synchronize repositories with GitHub.") from exc
