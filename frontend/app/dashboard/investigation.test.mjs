@@ -104,3 +104,12 @@ test("highlights traceback and exception rows while preserving literal log conte
   assert.match(preview, /Show all 120 lines/);
   assert.doesNotMatch(preview, /line 119/);
 });
+
+test("renders the full failed-job log in navigable pages", () => {
+  const text = Array.from({ length: 510 }, (_, i) => `output_${i + 1}`).join("\n");
+  const html = renderToStaticMarkup(createElement(EvidenceCode, { text, kind: "log", full: true }));
+  assert.match(html, /Full job log · 510 lines/);
+  assert.match(html, /output_500/);
+  assert.doesNotMatch(html, /output_501/);
+  assert.match(html, /Next lines/);
+});

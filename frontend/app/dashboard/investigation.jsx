@@ -1,5 +1,6 @@
 "use client";
 
+import { useAuth } from "@clerk/nextjs";
 import { ArrowUpRight } from "lucide-react";
 import Link from "next/link";
 import { EvidenceExplorer } from "./investigation-evidence";
@@ -43,7 +44,9 @@ function Classification({ classification }) {
 }
 
 export function Investigation({ repoId, runId, attempt }) {
-  const request = useWorkflowData(`/${encodeURIComponent(repoId)}/runs/${encodeURIComponent(runId)}/attempts/${encodeURIComponent(attempt)}`);
+  const { getToken } = useAuth();
+  const runPath = `/${encodeURIComponent(repoId)}/runs/${encodeURIComponent(runId)}/attempts/${encodeURIComponent(attempt)}`;
+  const request = useWorkflowData(runPath);
   const { data } = request;
   const { repository, run, diagnosis, evidence } = data || {};
   const workflowUrl = githubRunUrl(run?.html_url);
@@ -73,7 +76,7 @@ export function Investigation({ repoId, runId, attempt }) {
           </header>
           <Diagnosis diagnosis={diagnosis} evidence={evidence} status={run.investigation_status} />
           <Classification classification={run.classification} />
-          <EvidenceExplorer evidence={evidence} />
+          <EvidenceExplorer evidence={evidence} runPath={runPath} getToken={getToken} />
         </div>
       )}
     </>

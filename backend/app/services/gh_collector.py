@@ -154,17 +154,9 @@ class GitHubCollector:
         Returns None if logs are unavailable (404/410).
         Keeps only the last max_bytes of the log.
         """
-        url = f"{self.base_url}/repos/{owner}/{repo}/actions/jobs/{job_id}/logs"
-        headers = self._get_headers(token)
-
-        async with (
-            httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client,
-            client.stream("GET", url, headers=headers) as response,
-        ):
-            if response.status_code in (404, 410):
+        async with self.open_job_log(owner, repo, job_id, token) as response:
+            if response is None:
                 return None
-
-            response.raise_for_status()
 
             buffer = bytearray()
             async for chunk in response.aiter_bytes():
@@ -173,6 +165,24 @@ class GitHubCollector:
                     del buffer[:-max_bytes]
 
             return buffer.decode("utf-8", errors="replace")
+
+    @asynccontextmanager
+    async def open_job_log(
+        self, owner: str, repo: str, job_id: int | str, token: str,
+    ) -> AsyncIterator[httpx.Response | None]:
+        """Open the complete GitHub job log for streaming."""
+        url = f"{self.base_url}/repos/{owner}/{repo}/actions/jobs/{job_id}/logs"
+        headers = self._get_headers(token)
+
+        async with (
+            httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client,
+            client.stream("GET", url, headers=headers) as response,
+        ):
+            if response.status_code in (404, 410):
+                yield None
+            else:
+                response.raise_for_status()
+                yield response
 
     async def get_commit_diff(
         self,

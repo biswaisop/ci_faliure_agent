@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { apiFetch } from "../../lib/api.js";
 import { EvidenceCode } from "./evidence-code";
 import { comparisonLabel, evidenceAnchor } from "./evidence-format";
 
@@ -41,7 +42,50 @@ function EvidenceCompleteness({ evidence, jobs }) {
   );
 }
 
-export function EvidenceExplorer({ evidence }) {
+function JobLog({ path, excerpt, getToken }) {
+  const request = useRef(null);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+  const [log, setLog] = useState(null);
+
+  useEffect(() => () => request.current?.abort(), []);
+
+  async function load() {
+    if (request.current) return;
+    const controller = new AbortController();
+    request.current = controller;
+    setPending(true);
+    setError("");
+    try {
+      const response = await apiFetch(getToken, path, { signal: controller.signal });
+      if (response.status === 404) {
+        setError("The full job log is unavailable. GitHub may have expired it.");
+      } else if (!response.ok) {
+        throw new Error("Log request failed");
+      } else {
+        setLog(await response.text());
+      }
+    } catch {
+      if (!controller.signal.aborted) setError("Couldn’t load the full log. Try again or open the run on GitHub.");
+    } finally {
+      request.current = null;
+      if (!controller.signal.aborted) setPending(false);
+    }
+  }
+
+  if (log !== null) return log ? <EvidenceCode kind="log" text={log} full /> : <p>GitHub returned an empty job log.</p>;
+  return (
+    <>
+      <button type="button" disabled={pending} onClick={load} className="rounded-sm border border-line px-3 py-2 text-sm font-medium text-accent hover:bg-accent-soft disabled:opacity-60">
+        {pending ? "Loading full job log…" : "Show full job log"}
+      </button>
+      {error && <p role="alert">{error}</p>}
+      {excerpt && <EvidenceCode kind="log" text={excerpt} />}
+    </>
+  );
+}
+
+export function EvidenceExplorer({ evidence, runPath, getToken }) {
   const { failed_jobs, failure_packets, changed_files, correlations, base_sha, diff_available, comparison_status } = evidence;
   const jobs = new Map(failed_jobs.map((job) => [job.job_id, { job }]));
   for (const packet of failure_packets) jobs.set(packet.job_id, { ...jobs.get(packet.job_id), packet });
@@ -75,7 +119,8 @@ export function EvidenceExplorer({ evidence }) {
               </ul>
             </div>
           )}
-          {packet?.relevant_log ? <EvidenceCode kind="log" text={packet.relevant_log} /> : <p>No reduced log excerpt is available.</p>}
+          {job && runPath ? <JobLog path={`/api/github/repositories${runPath}/jobs/${encodeURIComponent(id)}/log`} excerpt={packet?.relevant_log} getToken={getToken} />
+            : packet?.relevant_log ? <EvidenceCode kind="log" text={packet.relevant_log} /> : <p>No reduced log excerpt is available.</p>}
         </EvidenceItem>
       ))}
       <h3 className="border-t border-line px-4 py-3 text-sm font-semibold sm:px-5">Changed files and patches</h3>
