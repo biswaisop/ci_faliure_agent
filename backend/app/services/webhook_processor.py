@@ -4,6 +4,8 @@ Background work for accepted GitHub deliveries and their recorded processing sta
 
 import logging
 from collections.abc import Awaitable, Callable
+from app.db.mongodb import MongoDb
+
 
 from app.db.models.workflow_run import (
     EvidenceUpdate,
@@ -19,12 +21,23 @@ from app.db.repositories.workflow_run_repository import (
     WorkflowRunInstallationConflict,
     WorkflowRunRepository,
 )
+
+from app.db.repositories.investigation_repository import (
+    InvestigationRepository,
+)
+from app.services.investigation_service import (
+    InvestigationService,
+)
+
 from app.services.gh_auth import get_installation_id, get_installation_token
 from app.services.gh_collector import GitHubCollector
 from app.services.github_sync_service import GitHubSyncService
 from app.services.github_webhook_event import GitHubWebhook
 from app.services.investigation_context_builder import build_investigation_context
 from app.services.log_reducer import reduce_job_log
+from app.services.failure_classifier import classify_failure
+from app.services.llm import llm
+
 from app.services.webhook_errors import WebhookProcessingError, processing_error
 from dependencies import get_github_collector
 from pymongo.errors import PyMongoError
@@ -234,6 +247,7 @@ async def collect_workflow_run(
             base_sha=base_sha,
             diff=diff,
         )
+
         logger.info(
             "Investigation context built: run_id=%s changed_files=%d correlations=%d",
             run.run_id,
@@ -241,17 +255,86 @@ async def collect_workflow_run(
             len(context.correlations),
         )
 
+        classification = classify_failure(context)
+
+
+        logger.info(
+            "CI failure classified: run_id=%s category=%s confidence=%.2f reasons=%s",
+            run.run_id,
+            classification.category,
+            classification.confidence,
+            classification.reasons,
+        )
+        
+
         # 11. Persist failure packets and investigation context in MongoDB
         await runs.update_evidence(
             run,
             EvidenceUpdate(
                 failure_packets=failure_packets,
                 investigation_context=context,
+                classification=classification,
             ),
         )
 
         # 12. Mark evidence collection as completed
         await runs.update_collection_status(run, "completed")
+
+        # investigation_repository = InvestigationRepository(
+        #     MongoDb.investigations()
+        # )
+
+        # service = InvestigationService(
+        #     repository=investigation_repository,
+        #     llm=llm,  # Inject your configured LangChain chat model
+        # )
+
+        # try:
+        #     diagnosis = await service.investigate(
+        #         context=context,
+        #         classification=classification,
+        #     )
+
+        #     logger.info(
+        #         "Diagnosis generated: run_id=%s summary=%s",
+        #         run.run_id,
+        #         diagnosis.summary,
+        #     )
+
+        # except Exception:
+        #     # Preserve the successful evidence collection status.
+        #     # InvestigationService records its own failure.
+        #     logger.exception(
+        #         "Diagnosis unavailable for run_id=%s",
+        #         run.run_id,
+        #     )
+
+        investigation_service = InvestigationService(
+            repository=InvestigationRepository(
+                MongoDb.investigations()
+            ),
+            llm = llm
+        )
+
+        try:
+            diagnosis = await investigation_service.investigate(
+                context=context,
+                classification=classification,
+            )
+
+            logger.info(
+                "Investigation completed: run_id=%s "
+                "root_cause=%s",
+                run.run_id,
+                diagnosis.root_cause,
+            )
+
+        except Exception:
+            logger.exception(
+                "LLM investigation failed for run_id=%s",
+                run.run_id,
+            )
+
         logger.info(
             "Workflow evidence collection completed: run_id=%s attempt=%s packets=%d",
             run.run_id,

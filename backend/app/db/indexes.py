@@ -103,3 +103,12 @@ async def setup_indexes() -> None:
     await MongoDb.agent_executions().create_index(
         "investigation_id"
     )
+
+    await MongoDb.investigations().create_index(
+    [
+        ("github_repo_id", 1),
+        ("run_id", 1),
+        ("run_attempt", 1),
+    ],
+    unique=True,
+)
