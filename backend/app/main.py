@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.db.indexes import setup_indexes
 from app.db.mongodb import MongoDb
-from app.routes import clerk_webhook, gh_installations, gh_webhook, users
+from app.routes import clerk_webhook, gh_installations, gh_webhook, repositories, users
 
 
 @asynccontextmanager
@@ -51,6 +51,7 @@ app.include_router(gh_webhook.router,  tags=["webhook"])
 app.include_router(clerk_webhook.router)
 app.include_router(users.router)
 app.include_router(gh_installations.router)
+app.include_router(repositories.router)
 
 if __name__ == "__main__":
     import uvicorn

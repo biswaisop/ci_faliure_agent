@@ -42,6 +42,30 @@ class MembershipRepository:
             query["status"] = status
         return [UserMembership.model_validate(document) async for document in self.collection.find(query)]
 
+    async def sync_github_repository_grants(self, clerk_user_id: str, installation_id: int, repository_ids: list[int]) -> None:
+        now = now_utc()
+        scope = {"clerk_user_id": clerk_user_id, "resource_type": "repository", "verification_source": "github"}
+        grants = [VerifiedMembershipGrant(
+            **scope, resource_id=repo_id, installation_id=installation_id, verified_at=now,
+        ) for repo_id in set(repository_ids)]
+
+        await self.collection.update_many(
+            {**scope, "installation_id": installation_id, "resource_id": {"$nin": repository_ids},
+             "status": "active", "verified_at": {"$lte": now}},
+            {"$set": {"status": "revoked", "updated_at": now}},
+        )
+        for grant in grants:
+            key = self._key(clerk_user_id, "repository", grant.resource_id)
+            selector = {**key, "verification_source": "github", "verified_at": {"$lte": now}}
+            update = {
+                "$set": {**grant.model_dump(), "status": "active", "updated_at": now},
+                "$setOnInsert": {"created_at": now},
+            }
+            try:
+                await self.collection.update_one(selector, update, upsert=True)
+            except DuplicateKeyError:
+                await self.collection.update_one(selector, update)
+
     async def get_membership(
         self, clerk_user_id: str, resource_type: ResourceType, resource_id: int,
     ) -> UserMembership | None:

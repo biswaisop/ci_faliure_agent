@@ -23,6 +23,7 @@ from app.db.repositories.github_installation_repository import (
     GitHubInstallationRepository,
 )
 from app.db.repositories.github_repository import GitHubRepositoryRepository
+from app.db.repositories.investigation_repository import InvestigationRepository
 from app.db.repositories.membership_repository import MembershipRepository
 from app.db.repositories.webhook_delivery_repository import WebhookDeliveryRepository
 from app.db.repositories.workflow_run_repository import (
@@ -30,7 +31,14 @@ from app.db.repositories.workflow_run_repository import (
     WorkflowRunRepository,
 )
 from app.main import app
-from app.services import gh_installations, github_sync_service, webhook_processor
+from app.schema.diagnosis import DiagnosisResult
+from app.schema.failure_packet import FailurePacket
+from app.services import (
+    gh_installations,
+    github_sync_service,
+    investigation_service,
+    webhook_processor,
+)
 from app.services.deduplicator import MongoDeliveryDeduplicator
 from app.services.gh_collector import GitHubCollector
 from app.services.github_authorization_service import GitHubAuthorizationService
@@ -165,6 +173,21 @@ async def test_database_failure_rejects_delivery(webhook_client, monkeypatch):
 
 async def test_signed_failed_run_records_correct_attempt_and_jobs(mongo_db, webhook_client, monkeypatch):
     monkeypatch.setattr(webhook_processor, "get_installation_token", AsyncMock(return_value="mock-token"))
+    monkeypatch.setattr(investigation_service, "get_llm", lambda: object())
+    investigations = InvestigationRepository(MongoDb.investigations())
+    processing_statuses = []
+    mark_pending = investigations.mark_pending
+
+    async def track_pending(self, run):
+        await mark_pending(run)
+        processing_statuses.append((await self.get(run))["status"])
+
+    async def diagnose(*, context, **kwargs):
+        processing_statuses.append((await investigations.get(context))["status"])
+        return DiagnosisResult(summary="Test failure", root_cause="Hypothesis", confidence="low")
+
+    monkeypatch.setattr(InvestigationRepository, "mark_pending", track_pending)
+    monkeypatch.setattr(investigation_service, "run_investigation", diagnose)
     calls = []
 
     def github_api(request):
@@ -179,9 +202,12 @@ async def test_signed_failed_run_records_correct_attempt_and_jobs(mongo_db, webh
         ]})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(github_api)) as client:
-        monkeypatch.setattr(webhook_processor, "get_github_collector", lambda: GitHubCollector(client=client))
+        collector = GitHubCollector(client=client)
+        monkeypatch.setattr(collector, "get_job_log", AsyncMock(return_value=None))
+        monkeypatch.setattr(collector, "get_last_passing_run", AsyncMock(return_value=None))
+        monkeypatch.setattr(webhook_processor, "get_github_collector", lambda: collector)
         payload = build_workflow_run_payload()
-        payload["workflow_run"].update(run_attempt=2, run_number=42, event="push")
+        payload["workflow_run"].update(run_attempt=2, run_number=42, event="push", name="Python tests")
         responses = await asyncio.gather(
             *(send(webhook_client, "run-2", payload=payload) for _ in range(5)),
         )
@@ -198,9 +224,26 @@ async def test_signed_failed_run_records_correct_attempt_and_jobs(mongo_db, webh
     assert len(runs) == 1
     run = runs[0]
     assert (run.run_attempt, run.run_number, run.event) == (2, 42, "push")
+    assert run.workflow_name == "Python tests"
     assert run.evidence.collection_status == "completed"
+    assert processing_statuses == ["pending", "running"]
+    assert (await investigations.get(run))["status"] == "completed"
     assert [(job.job_id, job.log_status) for job in run.failed_jobs] == [(77, "not_collected")]
     assert [(step.number, step.name) for step in run.failed_jobs[0].failed_steps] == [(2, "test")]
+
+
+async def test_relink_updates_only_github_repository_grants(mongo_db):
+    memberships = MembershipRepository()
+    await memberships.grant_membership(VerifiedMembershipGrant(
+        clerk_user_id="user_1", resource_type="repository", resource_id=3, installation_id=14,
+        verification_source="admin", role="admin", verified_at=datetime.now(UTC),
+    ))
+    await memberships.sync_github_repository_grants("user_1", 14, [1, 2, 3])
+    await memberships.sync_github_repository_grants("user_1", 14, [2])
+    assert (await memberships.get_membership("user_1", "repository", 1)).status == "revoked"
+    assert (await memberships.get_membership("user_1", "repository", 2)).status == "active"
+    admin = await memberships.get_membership("user_1", "repository", 3)
+    assert (admin.status, admin.role, admin.verification_source) == ("active", "admin", "admin")
 
 
 @pytest.mark.parametrize("reason", ["timeout", "rate_limit", "missing_token", "unexpected"])
@@ -243,7 +286,8 @@ async def test_workflow_attempts_merge_jobs_and_keep_evidence(mongo_db):
     rerun = run.model_copy(update={"run_attempt": 2, "head_branch": "staging"})
 
     await asyncio.gather(repository.upsert_workflow_run(run), repository.upsert_workflow_run(rerun))
-    await repository.update_evidence(run, EvidenceUpdate(base_sha="base", failure_packet="compact failure"))
+    packet = FailurePacket(job_id=4, job_name="test", relevant_log="compact failure")
+    await repository.update_evidence(run, EvidenceUpdate(base_sha="base", failure_packets=[packet]))
     await repository.update_evidence(run, EvidenceUpdate(diff_summary="source change", base_sha=None))
     await repository.update_collection_status(run, "completed")
 
@@ -264,11 +308,15 @@ async def test_workflow_attempts_merge_jobs_and_keep_evidence(mongo_db):
     assert (await repository.get_run(rerun)).failed_jobs == []
     updated, = await repository.get_recent_failures(1, workflow_id=3, head_branch="main")
     assert updated.run_number == 50 and updated.evidence.collection_status == "completed"
-    assert updated.evidence.base_sha == "base" and updated.evidence.failure_packet == "compact failure"
+    assert updated.evidence.base_sha == "base" and updated.evidence.failure_packets == [packet]
     assert updated.evidence.diff_summary == "source change"
     assert {job.job_id: job.log_status for job in updated.failed_jobs} == {4: "expired", 5: "missing"}
     job = next(job for job in updated.failed_jobs if job.job_id == 4)
     assert [step.number for step in job.failed_steps] == [1, 2]
+    assert await repository.get_run(run, installation_id=8) is None
+    summaries = await repository.list_run_summaries(1, 7, 2)
+    assert {summary.run_attempt for summary in summaries} == {1, 2}
+    assert all(not summary.failed_jobs and summary.evidence.failure_packets is None for summary in summaries)
 
 
 async def test_workflow_job_budget_preserves_existing_data(mongo_db, monkeypatch):

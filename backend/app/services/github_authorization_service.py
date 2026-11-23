@@ -64,14 +64,18 @@ class GitHubAuthorizationService:
         self, clerk_user_id: str, github_repo_id: int, *, installation_id: int | None = None,
     ) -> bool:
         """Require an active Clerk user, installation, repository, and scoped grant."""
+        repo = await self.get_authorized_repository(clerk_user_id, github_repo_id)
+        return repo is not None and (installation_id is None or repo.installation_id == installation_id)
+
+    async def get_authorized_repository(self, clerk_user_id: str, github_repo_id: int) -> GitHubRepository | None:
         if not await self._active_user(clerk_user_id):
-            return False
+            return None
         repo = await self.repositories.get_by_repo_id(github_repo_id)
-        if repo is None or not repo.is_active or (installation_id is not None and repo.installation_id != installation_id):
-            return False
+        if repo is None or not repo.is_active:
+            return None
         grants = await self.memberships.get_user_memberships(clerk_user_id, status="active")
         installation = await self.installations.get_by_installation_id(repo.installation_id)
-        return self._active_repository(repo, installation) and self._has_grant(repo, grants)
+        return repo if self._active_repository(repo, installation) and self._has_grant(repo, grants) else None
 
     async def can_access_workflow_run(self, clerk_user_id: str, run: WorkflowRunMetadata) -> bool:
         """Check a run against its original installation even after a repository transfer."""

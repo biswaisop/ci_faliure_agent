@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.db.models.github_installation import GitHubId
+from app.schema.failure_classification import FailureClassification
 from app.schema.failure_packet import FailurePacket
 from app.schema.investigation_context import InvestigationContext
 
@@ -21,6 +22,7 @@ class WorkflowRunKey(BaseModel):
 class WorkflowRunMetadata(WorkflowRunKey):
     installation_id: GitHubId | None = None
     workflow_id: GitHubId
+    workflow_name: ShortText | None = None
     run_number: GitHubId | None = None
     head_sha: ShortText
     head_branch: ShortText | None = None
@@ -54,6 +56,7 @@ class EvidenceUpdate(BaseModel):
     base_sha: ShortText | None = None
     diff_summary: str | None = Field(default=None, max_length=8_000)
     investigation_context: InvestigationContext | None = None
+    classification: FailureClassification | None = None
 
 
 class RunEvidence(EvidenceUpdate):

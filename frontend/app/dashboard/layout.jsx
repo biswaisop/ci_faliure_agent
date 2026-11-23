@@ -1,4 +1,4 @@
-import { ChevronRight, GitFork, UserRound } from "lucide-react";
+import { ChevronRight, GitFork, GitPullRequest, UserRound } from "lucide-react";
 import Link from "next/link";
 import { Brand } from "@/components/brand";
 
@@ -17,6 +17,9 @@ export default function WorkspaceLayout({ children }) {
       <div className="min-h-[calc(100dvh-4rem)] md:grid md:grid-cols-[13rem_minmax(0,1fr)] lg:grid-cols-[15rem_minmax(0,1fr)]">
         <aside className="border-b border-line bg-panel px-3 py-2 md:border-r md:border-b-0 md:p-4">
           <nav aria-label="Workspace" className="flex flex-wrap gap-1 md:sticky md:top-4 md:flex-col">
+            <Link className={navClass} href="/dashboard#repositories">
+              <GitPullRequest size={17} aria-hidden="true" /> Repositories
+            </Link>
             <Link className={navClass} href="/dashboard#installations">
               <GitFork size={17} aria-hidden="true" /> GitHub installations
             </Link>

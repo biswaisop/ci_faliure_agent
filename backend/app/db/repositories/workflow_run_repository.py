@@ -47,9 +47,12 @@ class WorkflowRunRepository:
             if not result.matched_count:
                 raise WorkflowRunInstallationConflict from None
 
-    async def get_run(self, run: WorkflowRunKey) -> WorkflowRun | None:
+    async def get_run(self, run: WorkflowRunKey, *, installation_id: int | None = None) -> WorkflowRun | None:
         """Read one attempt of a workflow run."""
-        document = await self.collection.find_one(self._key(run))
+        query = self._key(run)
+        if installation_id is not None:
+            query["installation_id"] = installation_id
+        document = await self.collection.find_one(query)
         return WorkflowRun.model_validate(document) if document else None
 
     async def list_runs_by_repository(
@@ -75,10 +78,19 @@ class WorkflowRunRepository:
             query["installation_id"] = installation_id
         return await self._recent(query, limit)
 
-    async def _recent(self, query: dict, limit: int) -> list[WorkflowRun]:
+    async def list_run_summaries(self, github_repo_id: int, installation_id: int, limit: int) -> list[WorkflowRun]:
+        projection = dict.fromkeys((
+            "github_repo_id", "installation_id", "run_id", "run_attempt", "workflow_id", "workflow_name",
+            "run_number", "head_sha", "head_branch", "conclusion", "html_url", "github_created_at",
+            "github_updated_at", "created_at", "updated_at", "evidence.collection_status", "evidence.classification",
+        ), 1)
+        return await self._recent({"github_repo_id": github_repo_id, "installation_id": installation_id}, limit, projection)
+
+    async def _recent(self, query: dict, limit: int, projection: dict | None = None) -> list[WorkflowRun]:
         if limit < 1:
             raise ValueError("limit must be positive")
-        cursor = self.collection.find(query).sort("created_at", DESCENDING).limit(limit)
+        cursor = (self.collection.find(query, projection) if projection else self.collection.find(query))
+        cursor = cursor.sort("created_at", DESCENDING).limit(limit)
         return [WorkflowRun.model_validate(document) async for document in cursor]
 
     async def add_failed_jobs(self, run: WorkflowRunKey, jobs: list[FailedJob]) -> None:

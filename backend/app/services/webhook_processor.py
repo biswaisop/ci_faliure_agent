@@ -5,29 +5,38 @@ Background work for accepted GitHub deliveries and their recorded processing sta
 import logging
 from collections.abc import Awaitable, Callable
 
+from pymongo.errors import PyMongoError
+
 from app.db.models.workflow_run import (
     EvidenceUpdate,
     FailedJob,
     WorkflowRunMetadata,
 )
+from app.db.mongodb import MongoDb
 from app.db.repositories.github_installation_repository import (
     GitHubInstallationRepository,
 )
 from app.db.repositories.github_repository import GitHubRepositoryRepository
+from app.db.repositories.investigation_repository import (
+    InvestigationRepository,
+)
 from app.db.repositories.webhook_delivery_repository import WebhookDeliveryRepository
 from app.db.repositories.workflow_run_repository import (
     WorkflowRunInstallationConflict,
     WorkflowRunRepository,
 )
+from app.services.failure_classifier import classify_failure
 from app.services.gh_auth import get_installation_id, get_installation_token
 from app.services.gh_collector import GitHubCollector
 from app.services.github_sync_service import GitHubSyncService
 from app.services.github_webhook_event import GitHubWebhook
 from app.services.investigation_context_builder import build_investigation_context
+from app.services.investigation_service import (
+    InvestigationService,
+)
 from app.services.log_reducer import reduce_job_log
 from app.services.webhook_errors import WebhookProcessingError, processing_error
 from dependencies import get_github_collector
-from pymongo.errors import PyMongoError
 
 logger = logging.getLogger(__name__)
 
@@ -234,6 +243,7 @@ async def collect_workflow_run(
             base_sha=base_sha,
             diff=diff,
         )
+
         logger.info(
             "Investigation context built: run_id=%s changed_files=%d correlations=%d",
             run.run_id,
@@ -241,17 +251,44 @@ async def collect_workflow_run(
             len(context.correlations),
         )
 
+        classification = classify_failure(context)
+
+
+        logger.info(
+            "CI failure classified: run_id=%s category=%s confidence=%.2f reasons=%s",
+            run.run_id,
+            classification.category,
+            classification.confidence,
+            classification.reasons,
+        )
+        
+
         # 11. Persist failure packets and investigation context in MongoDB
         await runs.update_evidence(
             run,
             EvidenceUpdate(
                 failure_packets=failure_packets,
                 investigation_context=context,
+                classification=classification,
             ),
         )
 
-        # 12. Mark evidence collection as completed
+        investigations = InvestigationRepository(MongoDb.investigations())
+        try:
+            await investigations.mark_pending(run)
+        except PyMongoError:
+            logger.exception("Could not queue investigation for run_id=%s", run.run_id)
+
         await runs.update_collection_status(run, "completed")
+
+        try:
+            await InvestigationService(investigations).investigate(
+                context=context,
+                classification=classification,
+            )
+        except Exception:  # noqa: BLE001 - the service persists investigation failures independently.
+            logger.error("Investigation unavailable for run_id=%s", run.run_id)
+
         logger.info(
             "Workflow evidence collection completed: run_id=%s attempt=%s packets=%d",
             run.run_id,
@@ -279,11 +316,6 @@ async def collect_workflow_run(
                 "Could not record workflow collection failure: run_id=%s",
                 run.run_id,
             )
-        logger.exception(
-            "Workflow collection failed: run_id=%s attempt=%s",
-            run.run_id,
-            run.run_attempt,
-        )
         raise
 
 
