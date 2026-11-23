@@ -80,6 +80,7 @@ def parse_webhook(event: GitHubEvent, payload: dict) -> GitHubWebhook | None:
 
     workflow_run = None
     if locator is not None and isinstance(run, dict) and event == "workflow_run":
+        head_repository = run.get("head_repository")
         try:
             workflow_run = WorkflowRunMetadata(
                 github_repo_id=locator.github_repo_id,
@@ -97,6 +98,7 @@ def parse_webhook(event: GitHubEvent, payload: dict) -> GitHubWebhook | None:
                 html_url=run.get("html_url"),
                 github_created_at=run.get("created_at"),
                 github_updated_at=run.get("updated_at"),
+                github_head_repo_id=head_repository.get("id") if isinstance(head_repository, dict) else None,
             )
         except ValidationError as exc:
             raise ValueError("Missing or invalid workflow run identifiers") from exc

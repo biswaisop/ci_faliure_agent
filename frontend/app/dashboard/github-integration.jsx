@@ -1,15 +1,18 @@
 "use client";
 
-import { ArrowUpRight, Building2, GitFork, GitPullRequest, UserRound } from "lucide-react";
+import { ArrowUpRight, Building2, ChevronDown, GitFork, GitPullRequest, UserRound } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { authorizeGithub, githubRequest } from "./github/github-api";
+import { Repositories } from "./repositories";
+import { workspacePanel } from "./workflow-ui";
 
 export function GithubIntegration({ getToken }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [authorizing, setAuthorizing] = useState(false);
   const [request, setRequest] = useState(0);
+  const [openInstallation, setOpenInstallation] = useState(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -39,7 +42,7 @@ export function GithubIntegration({ getToken }) {
       <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 id="github-heading" className="text-lg font-semibold tracking-tight">GitHub installations</h2>
-          <p className="mt-1 text-sm text-muted">Manage the GitHub accounts and organizations linked to AutopCI.</p>
+          <p className="mt-1 text-sm text-muted">Open a GitHub account or organization to view its repositories.</p>
         </div>
         {data?.install_url && (
           <div className="flex flex-wrap gap-2">
@@ -57,9 +60,9 @@ export function GithubIntegration({ getToken }) {
         )}
       </div>
 
-      <div className="overflow-hidden rounded-md border border-line bg-panel">
+      <div className="space-y-3">
         {error && (
-          <div className="px-4 py-5 sm:px-5">
+          <div className={`${workspacePanel} px-4 py-5 sm:px-5`}>
             <p role="alert" className="text-sm text-failure">{error}</p>
             {!data && (
               <Button
@@ -76,48 +79,48 @@ export function GithubIntegration({ getToken }) {
             )}
           </div>
         )}
-        {!data && !error && <p role="status" className="px-4 py-5 text-sm text-muted sm:px-5">Checking GitHub connections…</p>}
-        {data?.installations.length > 0 && (
-          <table className={`w-full table-fixed text-left text-sm ${error ? "border-t border-line" : ""}`}>
-            <thead className="border-b border-line bg-raised text-xs text-muted">
-              <tr>
-                <th scope="col" className="px-4 py-3 font-medium sm:px-5">Account</th>
-                <th scope="col" className="hidden w-32 px-4 py-3 font-medium sm:table-cell">Type</th>
-                <th scope="col" className="w-32 px-4 py-3 text-right font-medium sm:w-36 sm:px-5">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-line">
-              {data.installations.map((installation) => {
-                const organization = installation.target_type === "Organization";
-                const AccountIcon = organization ? Building2 : UserRound;
-                const type = organization ? "Organization" : "Personal";
-                const suspended = installation.status === "suspended";
-                return (
-                  <tr key={installation.id}>
-                    <th scope="row" className="px-4 py-4 font-medium sm:px-5">
-                      <div className="flex items-center gap-3">
-                        <AccountIcon size={17} className="shrink-0 text-accent" aria-hidden="true" />
-                        <div className="min-w-0 wrap-break-word">
-                          {installation.account}
-                          <p className="mt-0.5 text-xs font-normal text-muted sm:hidden">{type}</p>
-                        </div>
-                      </div>
-                    </th>
-                    <td className="hidden px-4 py-4 text-muted sm:table-cell">{type}</td>
-                    <td className="px-4 py-4 text-right sm:px-5">
-                      <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium ${suspended ? "bg-failure/10 text-failure" : "bg-accent-soft text-accent"}`}>
-                        <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
-                        {suspended ? "Suspended" : "Connected"}
-                      </span>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
+        {!data && !error && <p role="status" className={`${workspacePanel} px-4 py-5 text-sm text-muted sm:px-5`}>Checking GitHub connections…</p>}
+        {data?.installations.map((installation) => {
+          const { id, account, status, target_type } = installation;
+          const organization = target_type === "Organization";
+          const AccountIcon = organization ? Building2 : UserRound;
+          const suspended = status === "suspended";
+          const open = openInstallation === id;
+          const panelId = `installation-${id}-repositories`;
+
+          return (
+            <div key={id} className={workspacePanel}>
+              <h3>
+                <button
+                  type="button"
+                  aria-expanded={open}
+                  aria-controls={panelId}
+                  onClick={() => setOpenInstallation(open ? null : id)}
+                  className="flex w-full cursor-pointer items-center gap-3 rounded-md px-4 py-4 text-left hover:bg-raised sm:px-5"
+                >
+                  <span className="grid size-10 shrink-0 place-items-center rounded-sm bg-accent-soft text-accent">
+                    <AccountIcon size={19} aria-hidden="true" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-semibold wrap-break-word">{account}</span>
+                    <span className="block text-xs text-muted">{organization ? "Organization" : "Personal"}</span>
+                  </span>
+                  <span className={`rounded-full px-2 py-1 text-xs font-medium ${suspended ? "bg-failure/10 text-failure" : "bg-accent-soft text-accent"}`}>
+                    {suspended ? "Suspended" : "Connected"}
+                  </span>
+                  <ChevronDown size={17} className={`shrink-0 text-muted ${open ? "rotate-180" : ""}`} aria-hidden="true" />
+                </button>
+              </h3>
+              <div id={panelId} hidden={!open}>
+                {open && (suspended ? (
+                  <p className="border-t border-line px-4 py-4 text-sm text-muted sm:px-5">Repositories are unavailable while this installation is suspended.</p>
+                ) : <Repositories installationId={id} />)}
+              </div>
+            </div>
+          );
+        })}
         {data?.installations.length === 0 && (
-          <div className="px-4 py-10 text-center text-sm sm:py-14">
+          <div className={`${workspacePanel} px-4 py-10 text-center text-sm sm:py-14`}>
             <span className="mx-auto grid size-11 place-items-center rounded-md border border-line bg-accent-soft text-accent">
               <GitPullRequest size={21} aria-hidden="true" />
             </span>
@@ -128,7 +131,7 @@ export function GithubIntegration({ getToken }) {
           </div>
         )}
         {data && !data.install_url && (
-          <p className="border-t border-line px-4 py-4 text-sm text-muted sm:px-5">GitHub App setup is incomplete. Contact your workspace administrator.</p>
+          <p className={`${workspacePanel} px-4 py-4 text-sm text-muted sm:px-5`}>GitHub App setup is incomplete. Contact your workspace administrator.</p>
         )}
       </div>
     </section>

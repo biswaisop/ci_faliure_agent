@@ -32,6 +32,7 @@ class WorkflowRunMetadata(WorkflowRunKey):
     html_url: ShortText | None = None
     github_created_at: datetime | None = None
     github_updated_at: datetime | None = None
+    github_head_repo_id: GitHubId | None = None
 
 
 class FailedStep(BaseModel):

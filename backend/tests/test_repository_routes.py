@@ -10,6 +10,34 @@ from app.main import app
 from app.routes import repositories
 
 
+def test_repository_pages_are_scoped_to_the_selected_installation(monkeypatch):
+    owner = SimpleNamespace(login="team")
+    authorized = [SimpleNamespace(github_repo_id=1, installation_id=8, name="personal", owner=owner)]
+    authorized.extend(
+        SimpleNamespace(github_repo_id=repo_id, installation_id=10, name=f"repo-{repo_id}", owner=owner)
+        for repo_id in range(2, 23)
+    )
+    authorization = SimpleNamespace(list_authorized_repositories=AsyncMock(return_value=authorized))
+    runs = SimpleNamespace(list_run_summaries=AsyncMock(return_value=[]))
+    investigations = SimpleNamespace(list_statuses=AsyncMock(return_value={}))
+    monkeypatch.setitem(app.dependency_overrides, current_clerk_user_id, lambda: "user_1")
+    monkeypatch.setitem(app.dependency_overrides, repositories.get_authorization, lambda: authorization)
+    monkeypatch.setitem(app.dependency_overrides, repositories.get_runs, lambda: runs)
+    monkeypatch.setitem(app.dependency_overrides, repositories.get_investigations, lambda: investigations)
+
+    client = TestClient(app)
+    base = "/api/github/repositories"
+    first_page = client.get(base, params={"installation_id": 10}).json()
+    assert [repo["id"] for repo in first_page["repositories"]] == [str(repo_id) for repo_id in range(2, 22)]
+    assert first_page["next_offset"] == 20
+
+    last_page = client.get(base, params={"installation_id": 10, "offset": first_page["next_offset"]}).json()
+    assert [repo["id"] for repo in last_page["repositories"]] == ["22"]
+    assert last_page["next_offset"] is None
+    assert client.get(base, params={"installation_id": 99}).json() == {"repositories": [], "next_offset": None}
+    assert all(request.args[1] == 10 for request in runs.list_run_summaries.await_args_list)
+
+
 def test_workflow_reads_use_repository_scope_and_keep_attempts_separate(monkeypatch):
     job_id = 2**53 + 1
     run = WorkflowRun.model_validate({

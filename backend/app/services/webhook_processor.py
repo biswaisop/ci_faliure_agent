@@ -171,12 +171,13 @@ async def collect_workflow_run(
                     job_id=job_id,
                     token=token,
                 )
-            except Exception:
-                logger.exception(
-                    "Failed to fetch job log: run_id=%s attempt=%s job_id=%s",
+            except Exception as exc:  # noqa: BLE001 - keep the other evidence if a log download fails.
+                logger.warning(
+                    "Failed to fetch job log: run_id=%s attempt=%s job_id=%s reason=%s",
                     run.run_id,
                     run.run_attempt,
                     job_id,
+                    processing_error(exc),
                 )
                 # Preserve job in evidence even if log download failed
                 raw_log = None
@@ -209,27 +210,19 @@ async def collect_workflow_run(
                 packet.extraction_status,
             )
 
-        # 9. Retrieve baseline passing run to identify commit diff range
-        last_success = await collector.get_last_passing_run(
+        # 9. Verify the previous successful attempt and its commit ancestry.
+        comparison = await collector.resolve_commit_comparison(
             owner=owner,
             repo=repo_name,
             workflow_id=run.workflow_id,
             branch=run.head_branch,
-            before_run=run.run_id,
+            run_id=run.run_id,
+            run_attempt=run.run_attempt,
+            head_sha=run.head_sha,
+            failed_at=run.github_updated_at,
+            head_repository_id=run.github_head_repo_id,
             token=token,
         )
-        base_sha = last_success["head_sha"] if last_success else None
-
-        # Fetch commit diff if a baseline commit exists and differs from head
-        diff = None
-        if base_sha and base_sha != run.head_sha:
-            diff = await collector.get_commit_diff(
-                owner=owner,
-                repo=repo_name,
-                base=base_sha,
-                head=run.head_sha,
-                token=token,
-            )
 
         # 10. Assemble failure packets, diff changes, and file correlations
         context = build_investigation_context(
@@ -240,15 +233,20 @@ async def collect_workflow_run(
             head_sha=run.head_sha,
             head_branch=run.head_branch,
             failure_packets=failure_packets,
-            base_sha=base_sha,
-            diff=diff,
+            base_sha=comparison.base_sha,
+            diff=comparison.diff,
+            comparison_status=comparison.status,
+            comparison_reason=comparison.reason,
         )
 
         logger.info(
-            "Investigation context built: run_id=%s changed_files=%d correlations=%d",
-            run.run_id,
-            len(context.changed_files),
-            len(context.correlations),
+            "Investigation context built",
+            extra={
+                "github_repo_id": repo.github_repo_id, "run_id": run.run_id, "run_attempt": run.run_attempt,
+                "workflow_id": run.workflow_id, "comparison_status": context.comparison_status,
+                "comparison_reason": context.comparison_reason, "changed_file_count": len(context.changed_files),
+                "correlation_count": len(context.correlations),
+            },
         )
 
         classification = classify_failure(context)

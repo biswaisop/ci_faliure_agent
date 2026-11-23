@@ -60,13 +60,14 @@ class InvestigationService:
 
             return diagnosis
 
-        except Exception:
-            logger.exception(
+        except Exception as exc:
+            logger.warning(
                 "Investigation failed: "
-                "repo_id=%s run_id=%s attempt=%s",
+                "repo_id=%s run_id=%s attempt=%s error_type=%s",
                 context.github_repo_id,
                 context.run_id,
                 context.run_attempt,
+                type(exc).__name__,
             )
 
             try:
@@ -74,10 +75,11 @@ class InvestigationService:
                     context,
                     error_code="investigation_failed",
                 )
-            except Exception:
-                logger.exception(
+            except Exception as persistence_error:  # noqa: BLE001 - preserve the original investigation failure.
+                logger.error(
                     "Could not persist investigation failure: "
-                    "run_id=%s",
+                    "run_id=%s error_type=%s",
                     context.run_id,
+                    type(persistence_error).__name__,
                 )
             raise

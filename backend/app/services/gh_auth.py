@@ -48,7 +48,7 @@ async def get_installation_id(owner: str, repo: str) -> int:
     )
 
     headers = {
-        "Authorization":f"Bearer: {app_jwt}",
+        "Authorization": f"Bearer {app_jwt}",
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28"
     }
