@@ -5,10 +5,11 @@ from pathlib import PurePosixPath
 from app.schema.failure_packet import FailurePacket
 from app.schema.investigation_context import (
     ChangedFile,
+    ComparisonReason,
+    ComparisonStatus,
     FileCorrelation,
     InvestigationContext,
 )
-
 
 # Recognizes common pytest file paths in log excerpts.
 PYTHON_PATH_RE = re.compile(
@@ -104,6 +105,8 @@ def build_investigation_context(
     failure_packets: list[FailurePacket],
     base_sha: str | None = None,
     diff: dict | None = None,
+    comparison_status: ComparisonStatus = "not_attempted",
+    comparison_reason: ComparisonReason | None = None,
 ) -> InvestigationContext:
     """Assemble collected CI evidence into an investigation context."""
 
@@ -116,6 +119,10 @@ def build_investigation_context(
         failure_packets,
         changed_files,
     )
+    files_limit_reached = len(changed_files) >= 300 or bool((diff or {}).get("files_limit_reached"))
+    incomplete = files_limit_reached or any(not file.patch or file.truncated for file in changed_files)
+    if diff is not None:
+        comparison_status = "partial" if incomplete else "available"
 
     return InvestigationContext(
         github_repo_id=github_repo_id,
@@ -129,10 +136,8 @@ def build_investigation_context(
         changed_files=changed_files,
         correlations=correlations,
         diff_available=diff is not None,
-        diff_may_be_incomplete=(
-            len(changed_files) >= 300
-            or bool(
-                (diff or {}).get("files_limit_reached")
-            )
-        ),
+        diff_may_be_incomplete=incomplete,
+        comparison_status=comparison_status,
+        comparison_reason=comparison_reason,
+        files_limit_reached=files_limit_reached,
     )

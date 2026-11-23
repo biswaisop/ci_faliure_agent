@@ -184,6 +184,8 @@ async def test_signed_failed_run_records_correct_attempt_and_jobs(mongo_db, webh
 
     async def diagnose(*, context, **kwargs):
         processing_statuses.append((await investigations.get(context))["status"])
+        assert context.comparison_status == "available"
+        assert context.changed_files[0].patch == "@@ -1 +1 @@\n-old\n+new"
         return DiagnosisResult(summary="Test failure", root_cause="Hypothesis", confidence="low")
 
     monkeypatch.setattr(InvestigationRepository, "mark_pending", track_pending)
@@ -193,6 +195,20 @@ async def test_signed_failed_run_records_correct_attempt_and_jobs(mongo_db, webh
     def github_api(request):
         calls.append(request.url.path)
         assert request.headers["Authorization"] == "Bearer mock-token"
+        if request.url.path.endswith("/workflows/998877/runs"):
+            assert request.url.params["branch"] == "main"
+            return httpx.Response(200, json={"workflow_runs": [{
+                "id": 17, "workflow_id": 998877, "head_branch": "main", "head_sha": "base",
+                "conclusion": "success", "status": "completed", "run_attempt": 1,
+                "created_at": "2026-11-22T10:00:00Z", "updated_at": "2026-11-22T10:01:00Z",
+            }]})
+        if request.url.path.endswith("/attempts/1"):
+            return httpx.Response(404)
+        if "/compare/" in request.url.path:
+            return httpx.Response(200, json={
+                "status": "ahead", "ahead_by": 1, "behind_by": 0, "merge_base_commit": {"sha": "base"},
+                "files": [{"filename": "app.py", "status": "modified", "patch": "@@ -1 +1 @@\n-old\n+new"}],
+            })
         return httpx.Response(200, json={"jobs": [
             {"id": 77, "name": "tests", "conclusion": "failure", "steps": [
                 {"number": 1, "name": "setup", "conclusion": "success"},
@@ -204,10 +220,11 @@ async def test_signed_failed_run_records_correct_attempt_and_jobs(mongo_db, webh
     async with httpx.AsyncClient(transport=httpx.MockTransport(github_api)) as client:
         collector = GitHubCollector(client=client)
         monkeypatch.setattr(collector, "get_job_log", AsyncMock(return_value=None))
-        monkeypatch.setattr(collector, "get_last_passing_run", AsyncMock(return_value=None))
         monkeypatch.setattr(webhook_processor, "get_github_collector", lambda: collector)
         payload = build_workflow_run_payload()
-        payload["workflow_run"].update(run_attempt=2, run_number=42, event="push", name="Python tests")
+        payload["workflow_run"].update(
+            run_attempt=2, run_number=42, event="push", name="Python tests", updated_at="2026-11-23T10:00:00Z",
+        )
         responses = await asyncio.gather(
             *(send(webhook_client, "run-2", payload=payload) for _ in range(5)),
         )
@@ -215,7 +232,12 @@ async def test_signed_failed_run_records_correct_attempt_and_jobs(mongo_db, webh
     assert [reply.status_code for reply in responses] == [200] * 5
     assert [reply.json()["status"] for reply in responses].count("accepted") == 1
     assert [reply.json()["status"] for reply in responses].count("duplicate") == 4
-    assert calls == ["/repos/test-org/test-repo/actions/runs/12345678/attempts/2/jobs"]
+    assert calls == [
+        "/repos/test-org/test-repo/actions/runs/12345678/attempts/2/jobs",
+        "/repos/test-org/test-repo/actions/workflows/998877/runs",
+        "/repos/test-org/test-repo/actions/runs/12345678/attempts/1",
+        "/repos/test-org/test-repo/compare/base...0123456789abcdef0123456789abcdef01234567",
+    ]
 
     delivery = await WebhookDeliveryRepository().get_delivery("run-2")
     assert delivery.status == "completed" and delivery.attempt_count == 1 and delivery.run_attempt == 2
@@ -226,6 +248,8 @@ async def test_signed_failed_run_records_correct_attempt_and_jobs(mongo_db, webh
     assert (run.run_attempt, run.run_number, run.event) == (2, 42, "push")
     assert run.workflow_name == "Python tests"
     assert run.evidence.collection_status == "completed"
+    assert run.evidence.investigation_context.comparison_status == "available"
+    assert run.evidence.investigation_context.changed_files[0].filename == "app.py"
     assert processing_statuses == ["pending", "running"]
     assert (await investigations.get(run))["status"] == "completed"
     assert [(job.job_id, job.log_status) for job in run.failed_jobs] == [(77, "not_collected")]

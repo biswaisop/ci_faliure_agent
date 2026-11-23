@@ -17,7 +17,7 @@ export function RepositoryRuns({ repoId }) {
 
   return (
     <>
-      <Link href="/dashboard#repositories" className="text-sm text-accent underline-offset-4 hover:underline">All repositories</Link>
+      <Link href="/dashboard#installations" className="text-sm text-accent underline-offset-4 hover:underline">GitHub installations</Link>
       <header className="mt-4 border-b border-line pb-6">
         {data && <p className="mb-2 font-mono text-sm wrap-break-word text-muted">{data.repository.owner}/{data.repository.name}</p>}
         <h1 className="text-3xl font-semibold tracking-tight">Workflow runs</h1>

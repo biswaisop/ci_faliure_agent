@@ -19,6 +19,8 @@ class DiagnosisDraft(BaseModel):
     suggested_actions: list[str] = Field(
         default_factory=list
     )
+    regression_attribution: Literal["supported", "possible", "insufficient_evidence"] = "insufficient_evidence"
+    limitations: list[str] = Field(default_factory=list)
 
 
 class DiagnosisResult(DiagnosisDraft):

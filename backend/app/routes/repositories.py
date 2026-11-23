@@ -79,8 +79,12 @@ async def recent_runs(
 async def list_repositories(
     user_id: ClerkUser, authorization: Authorization, runs: Runs, investigations: Investigations,
     offset: Annotated[int, Query(ge=0)] = 0,
+    installation_id: Annotated[int | None, Query(gt=0, le=2**63 - 1)] = None,
 ):
-    repositories = sorted(await authorization.list_authorized_repositories(user_id), key=lambda repo: repo.github_repo_id)
+    repositories = await authorization.list_authorized_repositories(user_id)
+    if installation_id is not None:
+        repositories = [repo for repo in repositories if repo.installation_id == installation_id]
+    repositories = sorted(repositories, key=lambda repo: repo.github_repo_id)
     page_size = 20
     page = repositories[offset:offset + page_size]
     histories = await gather(*(recent_runs(repo, runs, investigations, 3) for repo in page))
@@ -135,5 +139,8 @@ async def read_run(
             "base_sha": (context.base_sha if context else None) or evidence.base_sha,
             "diff_available": context.diff_available if context else False,
             "diff_may_be_incomplete": context.diff_may_be_incomplete if context else False,
+            "comparison_status": context.comparison_status if context else "not_attempted",
+            "comparison_reason": context.comparison_reason if context else None,
+            "files_limit_reached": context.files_limit_reached if context else False,
         },
     }

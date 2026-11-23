@@ -1,44 +1,51 @@
 "use client";
 
 import Link from "next/link";
+import { ArrowRight, CircleAlert, GitFork } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { repositoryPath, useWorkflowData } from "./workflow-data";
-import { RequestStatus, RunList, StatusBadge, workspacePanel } from "./workflow-ui";
+import { RequestStatus } from "./workflow-ui";
 
-export function Repositories() {
+export function Repositories({ installationId }) {
   const [offsets, setOffsets] = useState([0]);
-  const request = useWorkflowData(`?offset=${offsets.at(-1)}`);
+  const request = useWorkflowData(`?installation_id=${installationId}&offset=${offsets.at(-1)}`);
   const { data } = request;
 
   return (
-    <section id="repositories" aria-labelledby="repositories-heading" className="mt-7 scroll-mt-6 sm:mt-9">
-      <h2 id="repositories-heading" className="text-lg font-semibold tracking-tight">Repositories</h2>
-      <p className="mt-1 text-sm text-muted">Recent GitHub Actions failures across your connected repositories.</p>
+    <div className="border-t border-line px-4 pb-4 sm:px-5 sm:pb-5">
       <RequestStatus {...request} />
       {data?.repositories.length === 0 && (
-        <div className={`${workspacePanel} mt-4 p-5 text-sm text-muted`}>
-          <p>No repositories with verified access are available yet.</p>
-          <p className="mt-2">Connect GitHub, or link an existing installation again to verify repository access.</p>
-          <a href="#installations" className="mt-3 inline-block text-accent underline-offset-4 hover:underline">Manage GitHub installations</a>
-        </div>
+        <p className="pt-4 text-sm text-muted">No repositories with verified access. Link this installation again to verify repository access.</p>
       )}
-      <div className="mt-4 space-y-4">
-        {data?.repositories.map((repo) => (
-          <section key={repo.id} className={workspacePanel} aria-labelledby={`repo-${repo.id}`}>
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3 sm:px-5">
-              <h3 id={`repo-${repo.id}`} className="min-w-0 font-semibold wrap-break-word">
-                <Link href={repositoryPath(repo.id)} className="underline-offset-4 hover:text-accent hover:underline">
-                  <span className="text-muted">{repo.owner}/</span>{repo.name}
+      {data?.repositories.length > 0 && (
+        <ul aria-label="Repositories" className="mt-4 grid grid-cols-[repeat(auto-fill,minmax(min(100%,15rem),1fr))] gap-3">
+          {data.repositories.map((repo) => {
+            const hasFailures = repo.recent_runs.length > 0;
+            const Icon = hasFailures ? CircleAlert : GitFork;
+            return (
+              <li key={repo.id} className="min-w-0">
+                <Link
+                  href={repositoryPath(repo.id)}
+                  className={`group flex h-full min-h-24 items-start gap-3 rounded-sm border p-4 ${hasFailures
+                    ? "border-failure/60 bg-[#351d1b] hover:border-failure hover:bg-[#412320]"
+                    : "border-line bg-raised hover:border-accent/60"}`}
+                >
+                  <Icon size={17} className={`mt-0.5 shrink-0 ${hasFailures ? "text-failure" : "text-muted"}`} aria-hidden="true" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-xs wrap-break-word text-muted">{repo.owner}</span>
+                    <span className="block text-sm font-semibold wrap-break-word">{repo.name}</span>
+                    <span className={`mt-2 block text-xs ${hasFailures ? "text-failure" : "text-muted"}`}>
+                      {hasFailures ? "Failed runs recorded" : "No failed runs recorded"}
+                    </span>
+                  </span>
+                  <ArrowRight size={16} className="mt-0.5 shrink-0 text-muted group-hover:text-foreground" aria-hidden="true" />
                 </Link>
-              </h3>
-              <StatusBadge tone="completed">GitHub connected</StatusBadge>
-            </div>
-            {repo.recent_runs.length ? <RunList repoId={repo.id} runs={repo.recent_runs} />
-              : <p className="px-4 py-4 text-sm text-muted sm:px-5">No failed workflow runs recorded.</p>}
-          </section>
-        ))}
-      </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
       {(offsets.length > 1 || data?.next_offset != null) && (
         <nav aria-label="Repository pages" className="mt-4 flex flex-wrap gap-2">
           <Button variant="outline" type="button" disabled={offsets.length === 1} onClick={() => setOffsets(offsets.slice(0, -1))}>
@@ -49,6 +56,6 @@ export function Repositories() {
           </Button>
         </nav>
       )}
-    </section>
+    </div>
   );
 }

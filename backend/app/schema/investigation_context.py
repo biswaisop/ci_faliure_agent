@@ -1,7 +1,18 @@
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from app.schema.failure_packet import FailurePacket
+
+ComparisonStatus = Literal[
+    "available", "partial", "no_previous_success", "same_commit", "baseline_not_ancestor",
+    "comparison_failed", "not_attempted",
+]
+ComparisonReason = Literal[
+    "branch_unavailable", "failure_time_unavailable", "history_limit", "github_rate_limited",
+    "github_access_denied", "commit_unavailable", "github_unavailable", "invalid_response",
+]
 
 
 class ChangedFile(BaseModel):
@@ -14,6 +25,7 @@ class ChangedFile(BaseModel):
 
     patch: str = ""
     truncated: bool = False
+    patch_status: Literal["available", "omitted", "truncated"] | None = None
 
 
 class FileCorrelation(BaseModel):
@@ -46,3 +58,6 @@ class InvestigationContext(BaseModel):
 
     diff_available: bool = False
     diff_may_be_incomplete: bool = False
+    comparison_status: ComparisonStatus = "not_attempted"
+    comparison_reason: ComparisonReason | None = None
+    files_limit_reached: bool = False
