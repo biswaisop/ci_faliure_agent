@@ -93,7 +93,12 @@ async def test_investigation_graph(has_diff, patch, correlated, attribution):
 async def test_warning_stays_a_hypothesis_when_cited_log_also_contains_error(quote_error):
     error = "Error: Couldn't find issue info in current context"
     hypothesis = "The unsupported numOfAssignee input caused the missing issue context."
-    packet = reduce_job_log(f"Warning: Unexpected input(s) 'numOfAssignee'\n{error}", 123, "Assign issue")
+    packet = reduce_job_log(
+        "2026-11-24T13:19:57.8339175Z ##[warning]Unexpected input(s) 'numOfAssignee'\n"
+        f"2026-11-24T13:19:58.0776416Z {error}\n"
+        "2026-11-24T13:19:58.1528278Z ##[warning]Node.js 20 is deprecated.",
+        123, "Assign issue",
+    )
     result = await run_investigation(
         context=InvestigationContext(
             github_repo_id=100, run_id=200, run_attempt=1, workflow_id=300, head_sha="abc123",
@@ -103,7 +108,7 @@ async def test_warning_stays_a_hypothesis_when_cited_log_also_contains_error(quo
         llm=FakeLLM(DiagnosisDraft(
             observed_error=error if quote_error else hypothesis,
             possible_cause=hypothesis,
-            confidence="high",
+            confidence="high" if quote_error else "insufficient_evidence",
             evidence_ids=["log:123"],
         )),
     )
@@ -112,10 +117,8 @@ async def test_warning_stays_a_hypothesis_when_cited_log_also_contains_error(quo
     assert result.possible_cause == hypothesis
     assert "could not be confirmed" in result.root_cause
     assert hypothesis not in result.summary
-    assert result.confidence == ("high" if quote_error else "insufficient_evidence")
-    assert result.summary == (
-        error if quote_error else "The workflow failed. No specific error was verified in the cited logs."
-    )
+    assert result.confidence == "high"
+    assert result.summary == error
 
 
 @pytest.mark.asyncio
