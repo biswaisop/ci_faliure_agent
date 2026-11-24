@@ -94,6 +94,35 @@ class GitHubCollector:
             "X-GitHub-Api-Version": self.api_version,
         }
 
+    async def repository_request(
+        self, method: str, path: str, token: str, **kwargs,
+    ) -> httpx.Response:
+        async with self._get_client(timeout=15.0) as client:
+            return await client.request(
+                method, f"{self.base_url}{path}", headers=self._get_headers(token),
+                follow_redirects=False, **kwargs,
+            )
+
+    async def read_repository_response(
+        self, path: str, token: str, *, limit: int, params: dict | None = None,
+    ) -> bytes | None:
+        async with (
+            self._get_client(timeout=15.0) as client,
+            client.stream(
+                "GET", f"{self.base_url}{path}", headers=self._get_headers(token), params=params,
+                follow_redirects=False,
+            ) as response,
+        ):
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            data = bytearray()
+            async for chunk in response.aiter_bytes(chunk_size=8192):
+                if len(data) + len(chunk) > limit:
+                    return None
+                data.extend(chunk)
+            return bytes(data)
+
     async def get_failed_jobs(
         self,
         owner: str,

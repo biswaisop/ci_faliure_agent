@@ -5,6 +5,7 @@ import { ArrowUpRight } from "lucide-react";
 import Link from "next/link";
 import { EvidenceExplorer } from "./investigation-evidence";
 import { Diagnosis } from "./investigation-diagnosis";
+import { SuggestedFix } from "./suggested-fix";
 import { repositoryPath, useWorkflowData } from "./workflow-data";
 import { categoryLabels, RequestStatus, RunStatuses, workflowName, workspacePanel } from "./workflow-ui";
 
@@ -48,7 +49,7 @@ export function Investigation({ repoId, runId, attempt }) {
   const runPath = `/${encodeURIComponent(repoId)}/runs/${encodeURIComponent(runId)}/attempts/${encodeURIComponent(attempt)}`;
   const request = useWorkflowData(runPath);
   const { data } = request;
-  const { repository, run, diagnosis, evidence } = data || {};
+  const { repository, run, diagnosis, evidence, fix_suggestion, pr_comment } = data || {};
   const workflowUrl = githubRunUrl(run?.html_url);
 
   return (
@@ -75,6 +76,7 @@ export function Investigation({ repoId, runId, attempt }) {
             </p>
           </header>
           <Diagnosis diagnosis={diagnosis} evidence={evidence} status={run.investigation_status} />
+          {(fix_suggestion || pr_comment) && <SuggestedFix fix={fix_suggestion} publication={pr_comment} />}
           <Classification classification={run.classification} />
           <EvidenceExplorer key={`${sessionId}:${runPath}`} evidence={evidence} runPath={runPath} getToken={getToken} />
         </div>

@@ -5,12 +5,13 @@ from dotenv import load_dotenv
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
 load_dotenv()
+LLM_MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b"
 
 
 @lru_cache(maxsize=1)
 def get_llm():
     return ChatNVIDIA(
-        model="nvidia/nemotron-3.5-lightning-30b-a3b",
+        model=LLM_MODEL,
         api_key=os.getenv("NVIDIA_API_KEY"),
         temperature=1,
         top_p=0.95,

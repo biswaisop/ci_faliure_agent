@@ -1,4 +1,5 @@
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,16 +7,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.db.indexes import setup_indexes
 from app.db.mongodb import MongoDb
 from app.routes import clerk_webhook, gh_installations, gh_webhook, repositories, users
+from app.services.post_investigation import followups_enabled, resume_followups
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     MongoDb.connect()
-
+    followups = None
     try:
         await setup_indexes()
+        if followups_enabled():
+            followups = asyncio.create_task(resume_followups())
         yield
     finally:
+        if followups:
+            followups.cancel()
+            with suppress(asyncio.CancelledError):
+                await followups
         MongoDb.disconnect()
 
 app = FastAPI(

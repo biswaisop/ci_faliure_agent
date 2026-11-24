@@ -5,7 +5,7 @@ from pydantic import AliasChoices, BaseModel, Field, ValidationError
 
 from app.db.models.github_installation import GitHubAccount, GitHubId
 from app.db.models.webhook_delivery import DeliveryMetadata
-from app.db.models.workflow_run import WorkflowRunMetadata
+from app.db.models.workflow_run import PullRequestHint, WorkflowRunMetadata
 
 GitHubEvent = Literal["workflow_run", "installation", "installation_repositories", "repository"]
 GitHubPathSegment = Annotated[str, Field(pattern=r"^[a-zA-Z0-9_.-]{1,100}$")]
@@ -47,6 +47,22 @@ class GitHubWebhook:
     run: WorkflowRunMetadata | None = None
 
 
+def pull_request_hints(run: dict) -> list[PullRequestHint]:
+    items = run.get("pull_requests")
+    if not isinstance(items, list) or len(items) > 20:
+        return []
+    try:
+        return [
+            PullRequestHint(
+                number=item["number"], base_repo_id=item["base"]["repo"]["id"],
+                head_repo_id=item["head"]["repo"]["id"], head_sha=item["head"]["sha"],
+            )
+            for item in items
+        ]
+    except (KeyError, TypeError, ValidationError):
+        return []
+
+
 def parse_webhook(event: GitHubEvent, payload: dict) -> GitHubWebhook | None:
     """Filter and validate only the signed event fields needed by the background process."""
     action = payload.get("action")
@@ -80,6 +96,9 @@ def parse_webhook(event: GitHubEvent, payload: dict) -> GitHubWebhook | None:
 
     workflow_run = None
     if locator is not None and isinstance(run, dict) and event == "workflow_run":
+        run_repository = run.get("repository")
+        if isinstance(run_repository, dict) and run_repository.get("id") != locator.github_repo_id:
+            raise ValueError("Workflow run repository does not match delivery")
         head_repository = run.get("head_repository")
         try:
             workflow_run = WorkflowRunMetadata(
@@ -99,6 +118,7 @@ def parse_webhook(event: GitHubEvent, payload: dict) -> GitHubWebhook | None:
                 github_created_at=run.get("created_at"),
                 github_updated_at=run.get("updated_at"),
                 github_head_repo_id=head_repository.get("id") if isinstance(head_repository, dict) else None,
+                pull_requests=pull_request_hints(run),
             )
         except ValidationError as exc:
             raise ValueError("Missing or invalid workflow run identifiers") from exc

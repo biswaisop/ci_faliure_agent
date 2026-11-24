@@ -25,6 +25,7 @@ from app.db.repositories.github_installation_repository import (
 from app.db.repositories.github_repository import GitHubRepositoryRepository
 from app.db.repositories.investigation_repository import InvestigationRepository
 from app.db.repositories.membership_repository import MembershipRepository
+from app.db.repositories.pr_comment_repository import PRCommentRepository
 from app.db.repositories.webhook_delivery_repository import WebhookDeliveryRepository
 from app.db.repositories.workflow_run_repository import (
     WorkflowRunInstallationConflict,
@@ -133,6 +134,8 @@ async def test_mongo_indexes_and_atomic_receipt(mongo_db):
     assert indexes["status_1_received_at_1"]["key"] == [("status", 1), ("received_at", 1)]
     run_indexes = await MongoDb.workflow_runs().index_information()
     assert run_indexes["github_repo_id_1_run_id_1_run_attempt_1"]["unique"]
+
+
     assert run_indexes["github_repo_id_1_created_at_-1"]["key"][-1] == ("created_at", -1)
 
     metadata = DeliveryMetadata(event_type="workflow_run", action="completed", run_id=1, run_attempt=2)
@@ -154,6 +157,27 @@ async def test_mongo_indexes_and_atomic_receipt(mongo_db):
     assert record.status == "completed" and record.attempt_count == 1
     assert record.started_at and record.completed_at and record.last_error is None
     assert [item.delivery_id for item in await repo.list_stale(cutoff)] == ["pending"]
+
+
+async def test_mongo_publication_lease_recovers_uncertain_create(mongo_db):
+    run = WorkflowRunMetadata(
+        github_repo_id=123, installation_id=7, run_id=8, run_attempt=1, workflow_id=9, head_sha="a" * 40,
+    )
+    publications = PRCommentRepository()
+    claims = await asyncio.gather(*(publications.claim(run) for _ in range(8)))
+    claimed = [row for row in claims if row]
+    assert len(claimed) == 1
+    lease = claimed[0]["lease_id"]
+    await publications.write(run, lease, pr_number=12, create_uncertain=True)
+    await publications.collection.update_one(
+        publications.key(run), {"$set": {"lease_until": datetime.now(UTC) - timedelta(seconds=1)}},
+    )
+    recovered = await publications.claim(run)
+    assert recovered["lease_id"] != lease and recovered["create_uncertain"]
+    with pytest.raises(RuntimeError, match="lease lost"):
+        await publications.finish(run, lease, "published")
+    await publications.finish(run, recovered["lease_id"], "published", comment_id=100, create_uncertain=False)
+    assert (await publications.get(run))["comment_id"] == 100
 
 
 async def test_database_failure_rejects_delivery(webhook_client, monkeypatch):

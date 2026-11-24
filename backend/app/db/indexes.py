@@ -1,7 +1,9 @@
 from pymongo import ASCENDING, DESCENDING, IndexModel
 
 from app.db.mongodb import MongoDb
+from app.db.repositories.fix_suggestion_repository import FIX_SUGGESTIONS
 from app.db.repositories.github_repository import FULL_NAME_COLLATION
+from app.db.repositories.pr_comment_repository import PUBLICATIONS
 
 
 async def setup_indexes() -> None:
@@ -104,5 +106,19 @@ async def setup_indexes() -> None:
     await investigations.create_index(
         [("github_repo_id", ASCENDING), ("run_id", ASCENDING), ("run_attempt", ASCENDING)],
         name=index_name,
+        unique=True,
+    )
+    await MongoDb.get_collection(PUBLICATIONS).create_index(
+        [("github_repo_id", ASCENDING), ("run_id", ASCENDING), ("run_attempt", ASCENDING)], unique=True,
+    )
+    followups = MongoDb.get_collection("workflow_followups")
+    await followups.create_index(
+        [("github_repo_id", ASCENDING), ("run_id", ASCENDING), ("run_attempt", ASCENDING), ("stage", ASCENDING)],
+        unique=True,
+    )
+    await followups.create_index("due_at")
+    fixes = MongoDb.get_collection(FIX_SUGGESTIONS)
+    await fixes.create_index(
+        [("github_repo_id", ASCENDING), ("run_id", ASCENDING), ("run_attempt", ASCENDING), ("version", ASCENDING)],
         unique=True,
     )
