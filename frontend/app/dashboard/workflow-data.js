@@ -25,11 +25,12 @@ function shouldPoll(data) {
   return data.repositories.some((repo) => repo.recent_runs.some(isProcessing));
 }
 
-export function useWorkflowData(path) {
+export function useWorkflowData(path, cache) {
   const { getToken, isSignedIn, sessionId } = useAuth();
   const [request, setRequest] = useState(0);
   const [result, setResult] = useState(null);
-  const key = `${sessionId}:${path}:${request}`;
+  const cacheKey = `${sessionId}:${path}`;
+  const key = `${cacheKey}:${request}`;
 
   useEffect(() => {
     if (!isSignedIn) return;
@@ -45,21 +46,30 @@ export function useWorkflowData(path) {
       }
     }
 
-    async function load() {
+    async function load(useCache = false) {
       if (inFlight) return;
       inFlight = true;
       try {
-        const response = await apiFetch(getToken, `${apiPath}${path}`, {
-          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]),
-        });
-        if ([401, 403, 404, 422].includes(response.status)) {
-          data = null;
-          if (!controller.signal.aborted) setResult({ key, error: "This resource is unavailable for your session." });
-          return;
+        const cached = useCache ? cache?.get(cacheKey) : undefined;
+        if (cached && cached.expiresAt > Date.now()) {
+          data = cached.data;
+        } else {
+          const response = await apiFetch(getToken, `${apiPath}${path}`, {
+            signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]),
+          });
+          if (controller.signal.aborted) return;
+          if ([401, 403, 404, 422].includes(response.status)) {
+            data = null;
+            cache?.delete(cacheKey);
+            setResult({ key, error: "This resource is unavailable for your session." });
+            return;
+          }
+          if (!response.ok) throw new Error("Workflow request failed");
+          data = await response.json();
+          if (controller.signal.aborted) return;
+          cache?.set(cacheKey, { data, expiresAt: Date.now() + (shouldPoll(data) ? 5000 : 30000) });
         }
-        if (!response.ok) throw new Error("Workflow request failed");
-        data = await response.json();
-        if (!controller.signal.aborted) setResult({ key, data });
+        setResult({ key, data });
       } catch {
         if (!controller.signal.aborted) setResult({ key, data, error: "Couldn’t load workflow data. Try again shortly." });
       } finally {
@@ -74,16 +84,19 @@ export function useWorkflowData(path) {
     }
 
     document.addEventListener("visibilitychange", syncVisibility);
-    load();
+    load(true);
     return () => {
       controller.abort();
       clearTimeout(timer);
       document.removeEventListener("visibilitychange", syncVisibility);
     };
-  }, [getToken, isSignedIn, key, path]);
+  }, [cache, cacheKey, getToken, isSignedIn, key, path]);
 
   return {
     ...(isSignedIn && result?.key === key ? result : {}),
-    retry: () => setRequest((previous) => previous + 1),
+    retry: () => {
+      cache?.delete(cacheKey);
+      setRequest((previous) => previous + 1);
+    },
   };
 }

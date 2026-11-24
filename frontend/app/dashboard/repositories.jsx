@@ -7,9 +7,9 @@ import { Button } from "@/components/ui/button";
 import { repositoryPath, useWorkflowData } from "./workflow-data";
 import { RequestStatus } from "./workflow-ui";
 
-export function Repositories({ installationId }) {
+export function Repositories({ installationId, cache }) {
   const [offsets, setOffsets] = useState([0]);
-  const request = useWorkflowData(`?installation_id=${installationId}&offset=${offsets.at(-1)}`);
+  const request = useWorkflowData(`?installation_id=${installationId}&offset=${offsets.at(-1)}`, cache);
   const { data } = request;
 
   return (

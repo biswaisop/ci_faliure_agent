@@ -97,7 +97,7 @@ test("highlights traceback and exception rows while preserving literal log conte
   const html = renderToStaticMarkup(createElement(EvidenceCode, { text: log, kind: "log" }));
   assert.match(html, /text-sky-200.*Traceback/);
   assert.match(html, /text-failure.*TypeError: &lt;unsafe&gt;/);
-  assert.ok(html.includes("\n"));
+  assert.equal((html.match(/class="block min-h-5 border-l-2/g) || []).length, 4);
   assert.match(html, /Copy log/);
   const longLog = Array.from({ length: 120 }, (_, i) => `line ${i}`).join("\n");
   const preview = renderToStaticMarkup(createElement(EvidenceCode, { text: longLog, kind: "log" }));
@@ -105,11 +105,12 @@ test("highlights traceback and exception rows while preserving literal log conte
   assert.doesNotMatch(preview, /line 119/);
 });
 
-test("renders the full failed-job log in navigable pages", () => {
-  const text = Array.from({ length: 510 }, (_, i) => `output_${i + 1}`).join("\n");
+test("renders the complete failed-job log as separate rows in one scroll pane", () => {
+  const text = Array.from({ length: 510 }, (_, i) => `output_${i + 1}`).join("\r\n");
   const html = renderToStaticMarkup(createElement(EvidenceCode, { text, kind: "log", full: true }));
   assert.match(html, /Full job log · 510 lines/);
   assert.match(html, /output_500/);
-  assert.doesNotMatch(html, /output_501/);
-  assert.match(html, /Next lines/);
+  assert.match(html, /output_510/);
+  assert.equal((html.match(/class="block min-h-5 border-l-2/g) || []).length, 510);
+  assert.doesNotMatch(html, /Next lines|Show all|Show full job log/);
 });
