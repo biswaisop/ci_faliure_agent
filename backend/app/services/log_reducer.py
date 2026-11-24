@@ -3,7 +3,6 @@ import re
 
 from app.schema.failure_packet import FailurePacket
 
-
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 GITHUB_TIMESTAMP_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}T"
@@ -16,7 +15,7 @@ PYTEST_FAILURE_RE = re.compile(
 )
 
 ERROR_RE = re.compile(
-    r"(?P<type>[A-Za-z_]\w*(?:Error|Exception))"
+    r"(?P<type>^Error|[A-Za-z_]\w*(?:Error|Exception))"
     r":\s*(?P<message>.+)"
 )
 
@@ -52,11 +51,11 @@ def extract_failing_tests(lines: list[str]) -> list[str]:
 def extract_error(
     lines: list[str],
 ) -> tuple[str | None, str | None, int | None]:
-    """Return the last recognizable Python exception."""
+    """Return the last recognizable exception or standalone error line."""
     result = (None, None, None)
 
     for index, line in enumerate(lines):
-        match = ERROR_RE.search(line)
+        match = ERROR_RE.search(line.lstrip())
 
         if match:
             result = (
