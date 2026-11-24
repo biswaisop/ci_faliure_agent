@@ -19,6 +19,13 @@ class WorkflowRunKey(BaseModel):
     run_attempt: GitHubId = 1
 
 
+class PullRequestHint(BaseModel):
+    number: GitHubId
+    base_repo_id: GitHubId
+    head_repo_id: GitHubId
+    head_sha: Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
+
+
 class WorkflowRunMetadata(WorkflowRunKey):
     installation_id: GitHubId | None = None
     workflow_id: GitHubId
@@ -33,6 +40,7 @@ class WorkflowRunMetadata(WorkflowRunKey):
     github_created_at: datetime | None = None
     github_updated_at: datetime | None = None
     github_head_repo_id: GitHubId | None = None
+    pull_requests: list[PullRequestHint] = Field(default_factory=list, max_length=20)
 
 
 class FailedStep(BaseModel):

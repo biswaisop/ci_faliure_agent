@@ -110,6 +110,8 @@ def test_workflow_reads_use_repository_scope_and_keep_attempts_separate(monkeypa
     )
     runs = SimpleNamespace(list_run_summaries=AsyncMock(return_value=[run]), get_run=AsyncMock(return_value=run))
     investigations = SimpleNamespace(list_statuses=AsyncMock(return_value={(9, 2): "pending"}), get=AsyncMock())
+    followups = AsyncMock(return_value={})
+    monkeypatch.setattr(repositories, "read_attempt_followups", followups)
     monkeypatch.setitem(app.dependency_overrides, repositories.get_authorization, lambda: authorization)
     monkeypatch.setitem(app.dependency_overrides, repositories.get_runs, lambda: runs)
     monkeypatch.setitem(app.dependency_overrides, repositories.get_investigations, lambda: investigations)
@@ -138,6 +140,7 @@ def test_workflow_reads_use_repository_scope_and_keep_attempts_separate(monkeypa
     runs.get_run.return_value = run.model_copy(update={"installation_id": 99})
     assert client.get(detail).status_code == 404
     investigations.get.assert_not_awaited()
+    followups.assert_not_awaited()
     runs.get_run.return_value = run
 
     investigations.get.return_value = None
@@ -157,7 +160,13 @@ def test_workflow_reads_use_repository_scope_and_keep_attempts_separate(monkeypa
             "evidence_ids": [f"log:{job_id}"], "evidence_validated": True,
         },
     }
+    followups.return_value = {
+        "fix_suggestion": {"status": "insufficient_evidence"},
+        "pr_comment": {"status": "published", "comment_url": "https://github.com/team/ci/pull/4#issuecomment-3"},
+    }
     response = client.get(detail)
     assert response.json()["diagnosis"]["evidence_ids"] == [f"log:{job_id}"]
+    assert response.json()["fix_suggestion"]["status"] == "insufficient_evidence"
+    assert response.json()["pr_comment"]["comment_url"].endswith("#issuecomment-3")
     assert "internal-only" not in response.text
 from contextlib import asynccontextmanager

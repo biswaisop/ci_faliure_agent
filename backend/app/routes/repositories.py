@@ -2,28 +2,37 @@ from asyncio import gather
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack
 from datetime import UTC
-from typing import Annotated
+from typing import Annotated, Literal
+from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 from fastapi.responses import StreamingResponse
 from jwt import InvalidKeyError
+from pydantic import BaseModel
+from pymongo.errors import PyMongoError
 
 from app.core.clerk_auth import current_clerk_user_id
 from app.db.models.github_repository import GitHubRepository
 from app.db.models.workflow_run import WorkflowRun, WorkflowRunKey
 from app.db.mongodb import MongoDb
+from app.db.repositories.fix_suggestion_repository import FixSuggestionRepository
 from app.db.repositories.github_installation_repository import (
     GitHubInstallationRepository,
 )
 from app.db.repositories.github_repository import GitHubRepositoryRepository
 from app.db.repositories.investigation_repository import InvestigationRepository
 from app.db.repositories.membership_repository import MembershipRepository
+from app.db.repositories.pr_comment_repository import PRCommentRepository
 from app.db.repositories.user_repositories import UserRepository
 from app.db.repositories.workflow_run_repository import WorkflowRunRepository
 from app.schema.diagnosis import DiagnosisResult
+from app.schema.fix_suggestion import FixSuggestionView
+from app.services.fix_suggestion_service import suggestion_version
 from app.services.gh_auth import get_installation_token
 from app.services.github_authorization_service import GitHubAuthorizationService
+from app.services.post_investigation import followup_collection, followups_enabled
+from config import settings
 from dependencies import get_github_collector
 
 
@@ -131,19 +140,82 @@ async def get_authorized_run(
 AuthorizedRun = Annotated[tuple[GitHubRepository, WorkflowRun], Depends(get_authorized_run)]
 
 
-@router.get("/{repo_id}/runs/{run_id}/attempts/{attempt}")
+class PRCommentView(BaseModel):
+    status: Literal["pending", "publishing", "published", "updated", "no_pr_found", "ambiguous_pr", "uncertain", "failed"]
+    comment_url: str | None = None
+
+
+class AttemptDetail(BaseModel):
+    repository: dict
+    run: dict
+    diagnosis: DiagnosisResult | None
+    evidence: dict
+    fix_suggestion: FixSuggestionView | None = None
+    pr_comment: PRCommentView | None = None
+
+
+async def read_attempt_followups(
+    repo: GitHubRepository, run: WorkflowRun, diagnosis: DiagnosisResult | None,
+) -> dict:
+    if not followups_enabled() or diagnosis is None:
+        return {}
+    stages = {
+        row["stage"]: row["status"]
+        async for row in followup_collection().find(
+            PRCommentRepository.key(run), {"stage": 1, "status": 1},
+        )
+    }
+    fix, comment = None, None
+    context, classification = run.evidence.investigation_context, run.evidence.classification
+    if settings.AUTO_PCI_FIX_SUGGESTIONS and context and classification:
+        record = await FixSuggestionRepository().get(run, suggestion_version(context, classification, diagnosis))
+        if record:
+            fix = FixSuggestionView.model_validate(record)
+        elif "fix" in stages:
+            fix = FixSuggestionView(status="failed" if stages["fix"] == "failed" else "pending")
+        if fix and stages.get("fix") in {"pending", "retrying", "processing"} and fix.status == "failed":
+            fix = FixSuggestionView(status="pending")
+        if fix and fix.status == "generating" and stages.get("fix") == "failed":
+            fix = FixSuggestionView(status="failed")
+
+    if settings.AUTO_PCI_PR_COMMENTS:
+        row = await PRCommentRepository().get(run)
+        queued = any(stages.get(stage) in {"pending", "retrying", "processing"} for stage in (
+            "diagnosis_comment", "fix_comment",
+        ))
+        if row or "diagnosis_comment" in stages:
+            comment_url = None
+            if row:
+                number, comment_id = row.get("pr_number"), row.get("comment_id")
+                if type(number) is int and number > 0 and type(comment_id) is int and comment_id > 0:
+                    owner, name = quote(repo.owner.login, safe=""), quote(repo.name, safe="")
+                    comment_url = f"https://github.com/{owner}/{name}/pull/{number}#issuecomment-{comment_id}"
+            status = row["status"] if row else "failed"
+            if status == "publishing" and not queued:
+                status = "uncertain" if row.get("create_uncertain") else "failed"
+            comment = PRCommentView(status="pending" if queued else status, comment_url=comment_url)
+    return {"fix_suggestion": fix, "pr_comment": comment}
+
+
+@router.get("/{repo_id}/runs/{run_id}/attempts/{attempt}", response_model=AttemptDetail)
 async def read_run(authorized_run: AuthorizedRun, investigations: Investigations):
     repo, run = authorized_run
 
     investigation = await investigations.get(run)
     status = investigation.get("status") if investigation else None
-    diagnosis = investigation.get("diagnosis") if status == "completed" else None
+    saved = investigation.get("diagnosis") if status == "completed" else None
+    diagnosis = DiagnosisResult.model_validate(saved) if saved else None
     evidence = run.evidence
     context = evidence.investigation_context
     packets = (context.failure_packets if context else None) or evidence.failure_packets or run.failure_packets or []
+    try:
+        followups = await read_attempt_followups(repo, run, diagnosis)
+    except PyMongoError:
+        followups = {}
     return {
         "repository": repository_summary(repo), "run": run_summary(run, status),
-        "diagnosis": DiagnosisResult.model_validate(diagnosis) if diagnosis else None,
+        "diagnosis": diagnosis,
+        **followups,
         "evidence": {
             "failed_jobs": [
                 {**job.model_dump(exclude={"log_reference"}), "job_id": str(job.job_id)} for job in run.failed_jobs

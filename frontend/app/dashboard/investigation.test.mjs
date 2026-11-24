@@ -30,6 +30,7 @@ const jsxLoader = registerHooks({
 const { Diagnosis } = await import("./investigation-diagnosis.jsx");
 const { EvidenceExplorer } = await import("./investigation-evidence.jsx");
 const { EvidenceCode } = await import("./evidence-code.jsx");
+const { SuggestedFix } = await import("./suggested-fix.jsx");
 const { diffLines, evidenceAnchor, revealEvidence } = await import("./evidence-format.js");
 jsxLoader.deregister();
 
@@ -115,4 +116,25 @@ test("renders the complete failed-job log as separate rows in one scroll pane", 
   assert.match(html, /output_510/);
   assert.equal((html.match(/class="block min-h-5 border-l-2/g) || []).length, 510);
   assert.doesNotMatch(html, /Next lines|Show all|Show full job log/);
+});
+
+test("renders untested suggestions and the authorized comment link", () => {
+  const html = renderToStaticMarkup(createElement(SuggestedFix, {
+    fix: { status: "suggested", suggestion: {
+      summary: "Fix addition", rationale: "The reported result has the wrong sign.",
+      changes: [{
+        path: "src/math.py", original_snippet: "return a - b", replacement_snippet: "return a + b",
+        explanation: "Use addition.",
+      }],
+      risks: ["A caller may rely on subtraction."], tests_to_run: ["pytest tests/test_math.py"],
+    } },
+    publication: { status: "updated", comment_url: "https://github.com/sample/project/pull/4#issuecomment-2" },
+  }));
+  assert.match(html, /Not tested or applied/);
+  assert.match(html, /-return a - b/);
+  assert.match(html, /\+return a \+ b/);
+  assert.match(html, /pytest tests\/test_math\.py/);
+  assert.match(html, /PR comment updated/);
+  assert.match(html, /href="https:\/\/github\.com\/sample\/project\/pull\/4#issuecomment-2"/);
+  assert.doesNotMatch(html, /<button[^>]*>Apply/);
 });

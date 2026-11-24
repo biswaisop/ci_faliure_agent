@@ -58,7 +58,7 @@ async def get_installation_id(owner: str, repo: str) -> int:
         response.raise_for_status()
         return response.json()["id"]
 
-async def get_installation_token(installation_id: int) -> str:
+async def get_installation_token(installation_id: int, *, repository_id: int | None = None) -> str:
     """Create an installation access token for authenticating API requests on behalf of the app."""
     app_jwt = generate_app_jwt()
     url = (
@@ -73,7 +73,8 @@ async def get_installation_token(installation_id: int) -> str:
     }
 
     async with httpx.AsyncClient() as client:
-        response = await client.post(url, headers=headers)
+        options = {"json": {"repository_ids": [repository_id]}} if repository_id is not None else {}
+        response = await client.post(url, headers=headers, **options)
         response.raise_for_status()
         return response.json().get("token") or ""
 

@@ -15,7 +15,7 @@ Comparison of the current implementation against the architecture defined in [co
 | **2. Diff Correlation** | `Completed` | The collector compares the failing commit with an earlier passing commit from the same workflow and branch after verifying ancestry. The context builder correlates failing file paths with changed and renamed files. |
 | **3. Failure Classification** | `Completed` | The rule-based classifier returns `code_bug`, `dependency`, `infra_config`, or `unknown`, with confidence scores and reasons. |
 | **4. Bounded Investigation Agent** | `Completed` | LangGraph prepares bounded evidence, checks reported errors against cited logs, and falls back to extracted errors. The dashboard displays possible causes separately from the observed failure. |
-| **5. Structured Reporting & Dashboard** | `In Progress` | The dashboard shows workflow runs, diagnoses, diffs, and streamed job logs. It caches repository pages and downloaded job logs in memory for quick reopening. Automated PR commenting is next. |
+| **5. Structured Reporting & Dashboard** | `Completed` | The dashboard shows workflow runs, diagnoses, diffs, streamed job logs, untested fix suggestions, and PR comment status. Opt-in PR commenting publishes a diagnosis to a verified originating PR and updates it when a suggestion is available. |
 | **6. Sandboxed Auto-Fix** | `Planned` | Post-MVP scope per spec. |
 | **7. Trust / Feedback Loop** | `Planned` | Post-MVP scope per spec (👍/👎 feedback capture and repeat failure fingerprint store). |
 
@@ -84,6 +84,12 @@ Comparison of the current implementation against the architecture defined in [co
 - Repository pages are cached in memory per Clerk session, installation, and page while the dashboard is open. Pages are reused for up to 30 seconds, or 5 seconds when workflows are processing. Polling and Retry fetch fresh data.
 - Successfully downloaded job logs are kept in memory while viewing the same workflow attempt in the same session. Reopening a job uses the cached log. Reopening after a failed or canceled download retries the request.
 
+### PR Commenting and Fix Suggestions
+
+- The PR resolver verifies the base repository and workflow association before publishing to an open PR. The publisher uses an attempt-specific marker, verifies the app bot author, and records its lease and write intent in MongoDB to reconcile retries.
+- The fix graph reads a bounded set of files at the failed commit, checks each proposed edit against a unique source snippet, and stores suggestions separately from investigation evidence. The initial diagnosis can publish independently. A subsequent update includes a summary of the suggestion and links to the authorized dashboard for snippets.
+- Both follow-ups are opt-in. See the [configuration and required GitHub permissions](README.md#optional-follow-up-operation).
+
 ### User Identity & Multi-Tenant GitHub App Linking
 - Clerk webhook handling (`app/routes/clerk_webhook.py`) with out-of-order delivery protection and timestamp fencing.
 - PKCE OAuth flow (`app/routes/gh_installations.py`) for connecting GitHub App installations.
@@ -99,9 +105,9 @@ Comparison of the current implementation against the architecture defined in [co
 
 ## 3. Next Immediate Steps (Build Order Alignment)
 
-1. **Automated PR Commenting & GitHub Check Run Summaries:**
-   - Render a formatted Markdown comment from `DiagnosisResult` (summary, root cause, evidence citations, suggested actions).
-   - Post directly to the originating PR or GitHub Check Run using the installation access token.
+1. **Verify PR commenting in a test installation:**
+   - Approve the updated GitHub App permissions and exercise diagnosis publishing, suggestion updates, and retries on a test pull request.
+   - Evaluate Check Run summaries separately.
 2. **Slack & Notification Integration:**
    - Dispatch alerts to linked Slack channels upon diagnosis completion.
 3. **Flaky Run Evaluation:**

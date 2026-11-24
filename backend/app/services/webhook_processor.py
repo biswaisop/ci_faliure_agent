@@ -35,6 +35,11 @@ from app.services.investigation_service import (
     InvestigationService,
 )
 from app.services.log_reducer import reduce_job_log
+from app.services.post_investigation import (
+    followups_enabled,
+    post_investigation,
+    queue_followup,
+)
 from app.services.webhook_errors import WebhookProcessingError, processing_error
 from dependencies import get_github_collector
 
@@ -65,6 +70,11 @@ async def process_failed_workflow_run(
             repositories=repositories if repositories is not None else GitHubRepositoryRepository(),
             collector=collector if collector is not None else get_github_collector(),
         )
+        if followups_enabled() and event.run is not None:
+            try:
+                await post_investigation(event.run)
+            except Exception as exc:  # noqa: BLE001 - preserve delivery outcome.
+                logger.warning("Investigation follow-up unavailable type=%s", type(exc).__name__)
 
     await _process_delivery(delivery_id, event, collect, deliveries)
 
@@ -276,6 +286,12 @@ async def collect_workflow_run(
             await investigations.mark_pending(run)
         except PyMongoError:
             logger.exception("Could not queue investigation for run_id=%s", run.run_id)
+
+        if followups_enabled():
+            try:
+                await queue_followup(run)
+            except PyMongoError:
+                logger.warning("Could not queue follow-up for run_id=%s", run.run_id)
 
         await runs.update_collection_status(run, "completed")
 

@@ -20,7 +20,9 @@ function isProcessing(run) {
 }
 
 function shouldPoll(data) {
-  if (data.run) return isProcessing(data.run);
+  if (data.run) return isProcessing(data.run)
+    || ["pending", "generating"].includes(data.fix_suggestion?.status)
+    || ["pending", "publishing"].includes(data.pr_comment?.status);
   if (data.runs) return data.runs.some(isProcessing);
   return data.repositories.some((repo) => repo.recent_runs.some(isProcessing));
 }
