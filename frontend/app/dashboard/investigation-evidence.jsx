@@ -42,11 +42,12 @@ function EvidenceCompleteness({ evidence, jobs }) {
   );
 }
 
-function JobLog({ path, excerpt, getToken }) {
+function JobLog({ path, excerpt, getToken, logCache }) {
   const [error, setError] = useState("");
-  const [log, setLog] = useState(null);
+  const [log, setLog] = useState(() => logCache.get(path) ?? null);
 
   useEffect(() => {
+    if (logCache.has(path)) return;
     const controller = new AbortController();
 
     async function load() {
@@ -59,7 +60,9 @@ function JobLog({ path, excerpt, getToken }) {
         }
         if (!response.ok) throw new Error("Log request failed");
         const text = await response.text();
-        if (!controller.signal.aborted) setLog(text);
+        if (controller.signal.aborted) return;
+        logCache.set(path, text);
+        setLog(text);
       } catch {
         if (!controller.signal.aborted) setError("Couldn’t load the full log. Reopen this job to retry, or open the run on GitHub.");
       }
@@ -67,7 +70,7 @@ function JobLog({ path, excerpt, getToken }) {
 
     load();
     return () => controller.abort();
-  }, [getToken, path]);
+  }, [getToken, logCache, path]);
 
   if (log !== null) return log ? <EvidenceCode kind="log" text={log} full /> : <p>GitHub returned an empty job log.</p>;
   if (!error) return <p role="status">Loading job log…</p>;
@@ -80,6 +83,7 @@ function JobLog({ path, excerpt, getToken }) {
 }
 
 export function EvidenceExplorer({ evidence, runPath, getToken }) {
+  const [logCache] = useState(() => new Map());
   const { failed_jobs, failure_packets, changed_files, correlations, base_sha, diff_available, comparison_status } = evidence;
   const jobs = new Map(failed_jobs.map((job) => [job.job_id, { job }]));
   for (const packet of failure_packets) jobs.set(packet.job_id, { ...jobs.get(packet.job_id), packet });
@@ -113,7 +117,7 @@ export function EvidenceExplorer({ evidence, runPath, getToken }) {
               </ul>
             </div>
           )}
-          {job && runPath ? <JobLog path={`/api/github/repositories${runPath}/jobs/${encodeURIComponent(id)}/log`} excerpt={packet?.relevant_log} getToken={getToken} />
+          {job && runPath ? <JobLog path={`/api/github/repositories${runPath}/jobs/${encodeURIComponent(id)}/log`} excerpt={packet?.relevant_log} getToken={getToken} logCache={logCache} />
             : packet?.relevant_log ? <EvidenceCode kind="log" text={packet.relevant_log} /> : <p>No reduced log excerpt is available.</p>}
         </EvidenceItem>
       ))}

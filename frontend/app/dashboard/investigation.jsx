@@ -44,7 +44,7 @@ function Classification({ classification }) {
 }
 
 export function Investigation({ repoId, runId, attempt }) {
-  const { getToken } = useAuth();
+  const { getToken, sessionId } = useAuth();
   const runPath = `/${encodeURIComponent(repoId)}/runs/${encodeURIComponent(runId)}/attempts/${encodeURIComponent(attempt)}`;
   const request = useWorkflowData(runPath);
   const { data } = request;
@@ -76,7 +76,7 @@ export function Investigation({ repoId, runId, attempt }) {
           </header>
           <Diagnosis diagnosis={diagnosis} evidence={evidence} status={run.investigation_status} />
           <Classification classification={run.classification} />
-          <EvidenceExplorer evidence={evidence} runPath={runPath} getToken={getToken} />
+          <EvidenceExplorer key={`${sessionId}:${runPath}`} evidence={evidence} runPath={runPath} getToken={getToken} />
         </div>
       )}
     </>
