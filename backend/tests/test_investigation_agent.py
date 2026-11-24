@@ -118,6 +118,35 @@ async def test_warning_stays_a_hypothesis_when_cited_log_also_contains_error(quo
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reported_error", [None, "Pytest failed because of a dependency error."])
+async def test_extracted_error_is_reported_when_model_omits_an_exact_quote(reported_error):
+    error = "ModuleNotFoundError: No module named 'requests'"
+    packet = reduce_job_log(
+        "2026-11-24T13:15:11.1463007Z     import requests\n"
+        f"2026-11-24T13:15:11.1465362Z E   {error}\n"
+        "2026-11-24T13:15:11.1624874Z ##[error]Process completed with exit code 2.",
+        123, "Run Python Test Suite",
+    )
+    result = await run_investigation(
+        context=InvestigationContext(
+            github_repo_id=100, run_id=200, run_attempt=1, workflow_id=300, head_sha="abc123",
+            failure_packets=[packet],
+        ),
+        classification=FailureClassification(category="code_bug", confidence=0.8, reasons=[]),
+        llm=FakeLLM(DiagnosisDraft(
+            observed_error=reported_error,
+            confidence="insufficient_evidence",
+        )),
+    )
+
+    assert result.summary == error
+    assert result.confidence == "high"
+    assert result.evidence_ids == ["log:123"]
+    assert result.evidence_validated
+    assert "could not be confirmed" in result.root_cause
+
+
 def test_legacy_diagnosis_keeps_confidence_and_defaults_attribution():
     diagnosis = DiagnosisResult.model_validate({"summary": "Failed", "root_cause": "Type mismatch", "confidence": "high"})
     assert (diagnosis.confidence, diagnosis.regression_attribution, diagnosis.limitations) == ("high", "insufficient_evidence", [])
