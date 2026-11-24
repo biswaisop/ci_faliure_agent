@@ -13,6 +13,7 @@ export function GithubIntegration({ getToken }) {
   const [authorizing, setAuthorizing] = useState(false);
   const [request, setRequest] = useState(0);
   const [openInstallation, setOpenInstallation] = useState(null);
+  const [repositoryCache] = useState(() => new Map());
 
   useEffect(() => {
     const controller = new AbortController();
@@ -114,7 +115,7 @@ export function GithubIntegration({ getToken }) {
               <div id={panelId} hidden={!open}>
                 {open && (suspended ? (
                   <p className="border-t border-line px-4 py-4 text-sm text-muted sm:px-5">Repositories are unavailable while this installation is suspended.</p>
-                ) : <Repositories installationId={id} />)}
+                ) : <Repositories installationId={id} cache={repositoryCache} />)}
               </div>
             </div>
           );
