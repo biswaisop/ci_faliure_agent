@@ -42,11 +42,13 @@ test("renders diagnosis hierarchy, distinct confidence, and safe evidence links"
   const html = renderToStaticMarkup(createElement(Diagnosis, { status: "completed", evidence, diagnosis: {
     summary: "The checkout test raised a `TypeError` while calculating the invoice total. The failure interrupted the test before its output could be compared with the expected total.",
     root_cause: "A string was passed to `total()`.",
+    possible_cause: "The input could have come from the checkout form.",
     confidence: "high", regression_attribution: "insufficient_evidence", suggested_actions: ["Check `<script>` input."],
     limitations: ["The failing line was visible in the log."], evidence_validated: true,
     evidence_ids: ["log:12"], unsupported_evidence_ids: ["diff:unknown.py"],
   } }));
-  const sections = ["The checkout test raised", "Most likely root cause", "Failure mechanism confidence", "Regression attribution",
+  const sections = ["The checkout test raised", "Root cause", "Possible cause", "The input could have come from the checkout form.",
+    "Reported failure confidence", "Regression attribution",
     "Suggested next actions", "Evidence references"];
   const positions = sections.map((label) => html.indexOf(label));
   assert.ok(positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1])));

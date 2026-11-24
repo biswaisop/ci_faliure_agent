@@ -14,34 +14,24 @@ from app.schema.investigation_context import (
     FileCorrelation,
     InvestigationContext,
 )
+from app.services.log_reducer import reduce_job_log
 
 
 class FakeStructuredLLM:
-    def __init__(self, cited_ids):
-        self.cited_ids = cited_ids
+    def __init__(self, draft):
+        self.draft = draft
 
     async def ainvoke(self, messages):
-        assert "One or two concise sentences" in messages[0][1]
-        return DiagnosisDraft(
-            summary="Python assertion failed",
-            root_cause="A test assertion did not pass",
-            confidence="high",
-            evidence_ids=self.cited_ids,
-            regression_attribution="supported",
-            limitations=["Source available only as a patch."],
-            suggested_actions=[
-                "Inspect the failed assertion"
-            ],
-        )
+        return self.draft
 
 
 class FakeLLM:
-    def __init__(self, cited_ids):
-        self.cited_ids = cited_ids
+    def __init__(self, draft):
+        self.draft = draft
 
     def with_structured_output(self, schema):
         assert schema is DiagnosisDraft
-        return FakeStructuredLLM(self.cited_ids)
+        return FakeStructuredLLM(self.draft)
 
 
 @pytest.mark.asyncio
@@ -84,15 +74,51 @@ async def test_investigation_graph(has_diff, patch, correlated, attribution):
     result = await run_investigation(
         context=context,
         classification=classification,
-        llm=FakeLLM(citations),
+        llm=FakeLLM(DiagnosisDraft(
+            observed_error="AssertionError: assert 2 == 3",
+            confidence="high",
+            evidence_ids=citations,
+            regression_attribution="supported",
+        )),
     )
 
-    assert result.summary == "Python assertion failed"
+    assert result.summary == "AssertionError: assert 2 == 3"
     assert result.evidence_ids == citations
     assert result.evidence_validated is True
     assert (result.confidence, result.regression_attribution) == ("high", attribution)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("quote_error", [True, False])
+async def test_warning_stays_a_hypothesis_when_cited_log_also_contains_error(quote_error):
+    error = "Error: Couldn't find issue info in current context"
+    hypothesis = "The unsupported numOfAssignee input caused the missing issue context."
+    packet = reduce_job_log(f"Warning: Unexpected input(s) 'numOfAssignee'\n{error}", 123, "Assign issue")
+    result = await run_investigation(
+        context=InvestigationContext(
+            github_repo_id=100, run_id=200, run_attempt=1, workflow_id=300, head_sha="abc123",
+            failure_packets=[packet],
+        ),
+        classification=FailureClassification(category="code_bug", confidence=0.8, reasons=[]),
+        llm=FakeLLM(DiagnosisDraft(
+            observed_error=error if quote_error else hypothesis,
+            possible_cause=hypothesis,
+            confidence="high",
+            evidence_ids=["log:123"],
+        )),
+    )
+
+    assert result.evidence_validated
+    assert result.possible_cause == hypothesis
+    assert "could not be confirmed" in result.root_cause
+    assert hypothesis not in result.summary
+    assert result.confidence == ("high" if quote_error else "insufficient_evidence")
+    assert result.summary == (
+        error if quote_error else "The workflow failed. No specific error was verified in the cited logs."
+    )
+
+
 def test_legacy_diagnosis_keeps_confidence_and_defaults_attribution():
     diagnosis = DiagnosisResult.model_validate({"summary": "Failed", "root_cause": "Type mismatch", "confidence": "high"})
     assert (diagnosis.confidence, diagnosis.regression_attribution, diagnosis.limitations) == ("high", "insufficient_evidence", [])
+    assert diagnosis.possible_cause is None

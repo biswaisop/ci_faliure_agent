@@ -128,12 +128,12 @@ def build_investigation_graph(llm):
 You are a CI failure investigation assistant.
 
 Populate the structured diagnosis:
-- summary: One or two concise sentences in plain technical language describing what failed.
-  Keep identifiers such as run IDs, job IDs, SHAs, and evidence IDs out of the summary.
-- root_cause: Explain the immediate failure mechanism using observed evidence. Distinguish facts from hypotheses.
-  Use backticks for exact identifiers, paths, or expressions where helpful. Do not invent source lines.
-- confidence: Qualitative confidence in the immediate failure mechanism supported by the logs.
-  A clear traceback can support high confidence even without a commit comparison.
+- observed_error: Copy one complete error line verbatim from a cited log excerpt, or its extracted error_message.
+  Select the line that reports the failure. Use null if none is available.
+- possible_cause: Give a plausible explanation for the reported error as a hypothesis, or null if the evidence
+  offers none. A warning appearing before an error does not establish that it caused the error.
+- confidence: Qualitative confidence that the selected error describes the observed failure.
+  Use insufficient_evidence when there is no clear error. Do not rate confidence in the hypothesis here.
 - regression_attribution: Use supported only when a cited patch and cited log show how a particular change
   introduced the failure. A file correlation alone is insufficient. Use possible for a plausible cited
   change with uncertain causation, and insufficient_evidence when there is no usable comparison.
@@ -192,6 +192,18 @@ Rules:
             f"log:{packet.job_id}" in cited and (packet.relevant_log.strip() or packet.error_message)
             for packet in context.failure_packets
         )
+        reported_error = (draft.observed_error or "").strip()
+        observed_error = None
+        if reported_error:
+            for evidence_id in valid_ids:
+                if not evidence_id.startswith("log:"):
+                    continue
+                log = json.loads(state["evidence"][evidence_id])
+                if reported_error == log["error_message"] or any(
+                    reported_error == line.strip() for line in log["relevant_log"].splitlines()
+                ):
+                    observed_error = reported_error
+                    break
         cited_patches = {
             file.filename for file in context.changed_files
             if file.patch.strip() and f"diff:{file.filename}" in cited
@@ -205,9 +217,10 @@ Rules:
             attribution = "possible"
 
         diagnosis = DiagnosisResult(
-            summary=draft.summary,
-            root_cause=draft.root_cause,
-            confidence=draft.confidence if validated and cited_log else "insufficient_evidence",
+            summary=observed_error or "The workflow failed. No specific error was verified in the cited logs.",
+            root_cause="The underlying cause could not be confirmed from the collected evidence.",
+            possible_cause=draft.possible_cause if validated and cited_log else None,
+            confidence=draft.confidence if validated and observed_error else "insufficient_evidence",
             evidence_ids=valid_ids,
             unsupported_evidence_ids=invalid_ids,
             suggested_actions=draft.suggested_actions,
