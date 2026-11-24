@@ -47,13 +47,19 @@ export function Diagnosis({ diagnosis, evidence, status }) {
         <>
           <p className="max-w-[70ch] leading-relaxed wrap-break-word whitespace-pre-wrap"><InlineCode text={diagnosis.summary} /></p>
           <div>
-            <h3 className="text-sm font-semibold">Most likely root cause</h3>
+            <h3 className="text-sm font-semibold">Root cause</h3>
             <p className="mt-1 max-w-[75ch] text-sm leading-relaxed wrap-break-word whitespace-pre-wrap text-muted"><InlineCode text={diagnosis.root_cause} /></p>
           </div>
+          {diagnosis.possible_cause && (
+            <div>
+              <h3 className="text-sm font-semibold">Possible cause</h3>
+              <p className="mt-1 max-w-[75ch] text-sm leading-relaxed wrap-break-word whitespace-pre-wrap text-muted"><InlineCode text={diagnosis.possible_cause} /></p>
+            </div>
+          )}
           <div className="space-y-2 rounded-sm border border-line bg-background p-3">
             <dl className="grid gap-x-5 gap-y-2 text-sm sm:grid-cols-2">
               <div>
-                <dt className="text-xs text-muted">Failure mechanism confidence</dt>
+                <dt className="text-xs text-muted">Reported failure confidence</dt>
                 <dd className="mt-1 font-medium capitalize">{diagnosis.confidence.replaceAll("_", " ")}</dd>
               </div>
               <div>
@@ -81,8 +87,7 @@ export function Diagnosis({ diagnosis, evidence, status }) {
           <div className="space-y-2 border-t border-line pt-3">
             <h3 className="text-sm font-semibold">Evidence references</h3>
             <p className="text-sm text-muted">
-              {diagnosis.evidence_validated ? "Reference IDs checked. A match confirms that an evidence item exists." : "Reference ID validation did not pass."}{" "}
-              The diagnosis remains an AI-generated hypothesis.
+              {diagnosis.evidence_validated ? "Reference IDs checked. A match confirms that an evidence item exists." : "Reference ID validation did not pass."}
             </p>
             <Citations diagnosis={diagnosis} evidence={evidence} />
           </div>
