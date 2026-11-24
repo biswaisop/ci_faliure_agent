@@ -216,15 +216,28 @@ Rules:
         ):
             attribution = "possible"
 
+        confidence = draft.confidence if validated and observed_error else "insufficient_evidence"
+        if not observed_error:
+            for packet in context.failure_packets:
+                error = (packet.error_signature or packet.error_message or "").strip()
+                if not error:
+                    continue
+                observed_error = error
+                confidence = "high"
+                evidence_id = f"log:{packet.job_id}"
+                if evidence_id not in cited:
+                    valid_ids.append(evidence_id)
+                break
+
         diagnosis = DiagnosisResult(
             summary=observed_error or "The workflow failed. No specific error was verified in the cited logs.",
             root_cause="The underlying cause could not be confirmed from the collected evidence.",
             possible_cause=draft.possible_cause if validated and cited_log else None,
-            confidence=draft.confidence if validated and observed_error else "insufficient_evidence",
+            confidence=confidence,
             evidence_ids=valid_ids,
             unsupported_evidence_ids=invalid_ids,
             suggested_actions=draft.suggested_actions,
-            evidence_validated=validated,
+            evidence_validated=bool(valid_ids) and not invalid_ids,
             regression_attribution=attribution,
             limitations=draft.limitations,
         )
