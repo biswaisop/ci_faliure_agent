@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { apiFetch } from "../../lib/api.js";
 import { EvidenceCode } from "./evidence-code";
 import { comparisonLabel, evidenceAnchor } from "./evidence-format";
@@ -43,43 +43,37 @@ function EvidenceCompleteness({ evidence, jobs }) {
 }
 
 function JobLog({ path, excerpt, getToken }) {
-  const request = useRef(null);
-  const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [log, setLog] = useState(null);
 
-  useEffect(() => () => request.current?.abort(), []);
-
-  async function load() {
-    if (request.current) return;
+  useEffect(() => {
     const controller = new AbortController();
-    request.current = controller;
-    setPending(true);
-    setError("");
-    try {
-      const response = await apiFetch(getToken, path, { signal: controller.signal });
-      if (response.status === 404) {
-        setError("The full job log is unavailable. GitHub may have expired it.");
-      } else if (!response.ok) {
-        throw new Error("Log request failed");
-      } else {
-        setLog(await response.text());
+
+    async function load() {
+      try {
+        const response = await apiFetch(getToken, path, { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        if (response.status === 404) {
+          setError("The full job log is unavailable. GitHub may have expired it.");
+          return;
+        }
+        if (!response.ok) throw new Error("Log request failed");
+        const text = await response.text();
+        if (!controller.signal.aborted) setLog(text);
+      } catch {
+        if (!controller.signal.aborted) setError("Couldn’t load the full log. Reopen this job to retry, or open the run on GitHub.");
       }
-    } catch {
-      if (!controller.signal.aborted) setError("Couldn’t load the full log. Try again or open the run on GitHub.");
-    } finally {
-      request.current = null;
-      if (!controller.signal.aborted) setPending(false);
     }
-  }
+
+    load();
+    return () => controller.abort();
+  }, [getToken, path]);
 
   if (log !== null) return log ? <EvidenceCode kind="log" text={log} full /> : <p>GitHub returned an empty job log.</p>;
+  if (!error) return <p role="status">Loading job log…</p>;
   return (
     <>
-      <button type="button" disabled={pending} onClick={load} className="rounded-sm border border-line px-3 py-2 text-sm font-medium text-accent hover:bg-accent-soft disabled:opacity-60">
-        {pending ? "Loading full job log…" : "Show full job log"}
-      </button>
-      {error && <p role="alert">{error}</p>}
+      <p role="alert">{error}</p>
       {excerpt && <EvidenceCode kind="log" text={excerpt} />}
     </>
   );
