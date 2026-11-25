@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+UNCONFIRMED_ROOT_CAUSE = "The underlying cause could not be confirmed from the collected evidence."
+
 
 class DiagnosisFields(BaseModel):
 
