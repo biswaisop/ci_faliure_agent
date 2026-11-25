@@ -71,6 +71,31 @@ test("parses Markdown headings, code and lists without explorer links", () => {
   assert.doesNotMatch(html, /href="#evidence-/);
 });
 
+test("opens the suspected file's saved diff and failed-job excerpts from the report", () => {
+  const filename = "next.config.mjs";
+  const text = `### Suspected file\n\n\` ${filename} \`\n\nChanged \`other.ts\` too.`;
+  const files = [
+    { filename, patch: "@@ -1 +1 @@\n-export default config\n+export default function config(phase) {" },
+    { filename: "other.ts", patch: "+unrelated edit" },
+  ];
+  const html = renderToStaticMarkup(createElement(ReportMarkdown, {
+    text, diagnosis: { suspected_file: filename }, evidence: { ...evidence, changed_files: files },
+  }));
+  assert.match(html, /<details class=.*?<summary[^>]*>.*?next\.config\.mjs.*?<\/summary>/s);
+  assert.match(html, /aria-label="Unified diff"/);
+  assert.match(html, /\+export default function config\(phase\)/);
+  assert.match(html, /aria-label="Reduced job log"/);
+  assert.match(html, /TypeError: test/);
+  assert.doesNotMatch(html, /unrelated edit/);
+
+  const missing = renderToStaticMarkup(createElement(ReportMarkdown, {
+    text, evidence: { ...evidence, logged_changes: [{ path: filename }], failure_packets: [] },
+  }));
+  assert.match(missing, /<summary[^>]*>.*?next\.config\.mjs/);
+  assert.match(missing, /No diff was saved/);
+  assert.match(missing, /No failure log excerpts were collected/);
+});
+
 test("reads Markdown incrementally without corrupting characters split across chunks", async () => {
   const bytes = new TextEncoder().encode("### What failed\n\nCafé");
   const stream = new ReadableStream({
