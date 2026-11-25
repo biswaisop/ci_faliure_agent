@@ -102,6 +102,29 @@ test("shows the failed action, likely cause and implicated diff together", () =>
   assert.ok(html.includes(`href="#${encodeURIComponent(evidenceAnchor(`diff:${filename}`))}"`));
 });
 
+test("shows logged changed code for a saved diagnosis with no likely cause", () => {
+  const filename = "next.config.mjs";
+  const line = "export default function config(phase) {";
+  const view = {
+    ...evidence, diff_available: true,
+    changed_files: [{ filename, status: "modified", patch: `+${line}` }],
+    logged_changes: [{ path: filename, line }],
+  };
+  const diagnosis = {
+    summary: "TypeError: error must be an instance of Error",
+    root_cause: "The underlying cause could not be confirmed from the collected evidence.",
+    confidence: "high", suggested_actions: [], evidence_ids: ["log:12"], unsupported_evidence_ids: [],
+  };
+  const report = renderToStaticMarkup(createElement(Diagnosis, { status: "completed", evidence: view, diagnosis }));
+  assert.match(report, /Suspected file.*next\.config\.mjs/);
+  assert.match(report, /The failed job printed this changed line.*export default function config\(phase\)/);
+  assert.doesNotMatch(report, /Root cause|underlying cause could not be confirmed/);
+
+  const explorer = renderToStaticMarkup(createElement(EvidenceExplorer, { evidence: view }));
+  assert.match(explorer, /Files linked to the failure/);
+  assert.match(explorer, /<summary[^>]+bg-accent-soft[^>]*>next\.config\.mjs/);
+});
+
 test("renders comparison outcomes and the corresponding safe unified diff", () => {
   const unavailable = renderToStaticMarkup(createElement(EvidenceExplorer, { evidence }));
   assert.match(unavailable, /No earlier successful attempt was found/);

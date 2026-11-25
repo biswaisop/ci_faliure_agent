@@ -1,5 +1,6 @@
 
 import re
+from collections import Counter
 from pathlib import PurePosixPath
 
 from app.schema.failure_packet import FailurePacket
@@ -10,6 +11,7 @@ from app.schema.investigation_context import (
     FileCorrelation,
     InvestigationContext,
 )
+from app.services.pr_comment_renderer import SENSITIVE_TEXT
 
 # Recognizes repository-relative paths in test and compiler diagnostics.
 SOURCE_PATH_RE = re.compile(
@@ -92,6 +94,29 @@ def correlate_files(
             )
 
     return correlations
+
+
+def logged_changes(packets: list[FailurePacket], changed_files: list[ChangedFile]) -> dict[str, str]:
+    """Find distinctive added code printed in a failed step."""
+    logged = {line.strip() for packet in packets for line in packet.relevant_log.splitlines()}
+    matches = {}
+    for file in changed_files:
+        patch = file.patch.splitlines()
+        replaced = {tuple(raw[1:].split(maxsplit=2)[:2]) for raw in patch if raw.startswith("-")}
+        additions = (
+            raw[1:].strip() for raw in patch if raw.startswith("+") and not raw.startswith("+++")
+        )
+        candidates = dict.fromkeys(
+            line for line in additions
+            if 24 <= len(line) <= 300 and line in logged
+            and not line.startswith(("#", "//", "/*", "*")) and not SENSITIVE_TEXT.search(line)
+        )
+        matches[file.filename] = sorted(candidates, key=lambda line: tuple(line.split(maxsplit=2)[:2]) not in replaced)
+    counts = Counter(line for lines in matches.values() for line in lines)
+    return {
+        path: match for path, lines in matches.items()
+        if (match := next((line for line in lines if counts[line] == 1), None))
+    }
 
 
 def build_investigation_context(

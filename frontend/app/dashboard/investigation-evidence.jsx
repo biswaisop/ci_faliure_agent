@@ -3,11 +3,11 @@ import { apiFetch } from "../../lib/api.js";
 import { EvidenceCode } from "./evidence-code";
 import { comparisonLabel, evidenceAnchor } from "./evidence-format";
 
-function EvidenceItem({ title, id, children }) {
+function EvidenceItem({ title, id, highlighted = false, children }) {
   const [open, setOpen] = useState(false);
   return (
     <details id={id} onToggle={(event) => setOpen(event.currentTarget.open)} className="scroll-mt-4 border-t border-line open:bg-raised/40 target:bg-accent-soft">
-      <summary className="cursor-pointer px-4 py-3 text-sm font-medium wrap-break-word hover:text-accent sm:px-5">{title}</summary>
+      <summary className={`cursor-pointer px-4 py-3 text-sm font-medium wrap-break-word hover:text-accent sm:px-5${highlighted ? " bg-accent-soft text-accent" : ""}`}>{title}</summary>
       {open && <div className="min-w-0 space-y-3 px-4 pb-4 text-sm text-muted sm:px-5">{children}</div>}
     </details>
   );
@@ -121,12 +121,12 @@ export function EvidenceExplorer({ evidence, runPath, getToken }) {
             : packet?.relevant_log ? <EvidenceCode kind="log" text={packet.relevant_log} /> : <p>No reduced log excerpt is available.</p>}
         </EvidenceItem>
       ))}
-      <h3 className="border-t border-line px-4 py-3 text-sm font-semibold sm:px-5">Changed files and patches</h3>
+      <h3 className="border-t border-line px-4 py-3 text-sm font-semibold sm:px-5">Files linked to the failure</h3>
       <p className="border-t border-line px-4 py-3 text-sm text-muted sm:px-5">
-        {comparisonLabel(evidence)} {diff_available && !changed_files.length && "GitHub returned no changed files."}
+        {comparisonLabel(evidence)} {diff_available && !changed_files.length && "No changed file was linked to the failure."}
       </p>
       {changed_files.map((file) => (
-        <EvidenceItem key={file.filename} id={evidenceAnchor(`diff:${file.filename}`)} title={`${file.filename} · ${file.status}`}>
+        <EvidenceItem key={file.filename} id={evidenceAnchor(`diff:${file.filename}`)} title={`${file.filename} · ${file.status}`} highlighted>
           <p className="font-mono text-xs">{file.status} · +{file.additions} / −{file.deletions}</p>
           {file.previous_filename && <p className="wrap-break-word">Previous path · {file.previous_filename}</p>}
           {(file.patch_status === "truncated" || (file.patch && file.truncated)) && <p>Patch text exceeds the evidence collection limit.</p>}

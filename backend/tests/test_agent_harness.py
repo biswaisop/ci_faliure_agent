@@ -13,6 +13,7 @@ from app.schema.investigation_context import ChangedFile
 from app.services.failure_classifier import classify_failure
 from app.services.github_webhook_event import RepositoryLocator
 from app.services.log_reducer import reduce_job_log
+from config import settings
 from tests.test_investigation_agent import PAGES_LOG, FakeLLM, finding, make_context
 
 pytestmark = pytest.mark.anyio
@@ -93,14 +94,14 @@ export default function config(phase) {
         ContextSelection(relevant_diffs=["diff:app.ts"]),
         [("inspect_changed_file", {"path": CONFIG})],
         finding(
-            "github_actions", packet, likely_root_cause=cause, confidence="medium",
-            cause_evidence_id=source_id, cause_quote=EXPORT,
-            evidence_ids=["log:123", diff_id, source_id], investigated_files=[CONFIG],
+            "github_actions", packet, likely_root_cause=cause, confidence="medium", suspected_file=CONFIG,
+            observed_failure="GitHub Pages stopped during configuration.",
+            evidence_ids=[source_id], investigated_files=[CONFIG],
         ),
     )
     state = await run_harness(context=context, classification=classify_failure(context), llm=model, tools=tools)
     payload = model.prompts[2][1]
-    assert payload["changed_files"] == ["app.ts", CONFIG] and diff_id not in payload["evidence"]
+    assert payload["changed_files"] == ["app.ts", CONFIG] and set(payload["evidence"]) == {"log:123"}
     log = json.loads(payload["evidence"]["log:123"])["relevant_log"]
     assert "Injecting property=output and value=export" in log and EXPORT in log
     assert "token:" not in log and "Post job cleanup" not in log and "Cache restored" not in log
@@ -111,13 +112,15 @@ export default function config(phase) {
     report = state["investigation_report"]
     assert report.possible_cause == cause and report.suspected_file == CONFIG
     assert report.regression_attribution == "possible"
-    assert report.evidence_ids == ["log:123", diff_id, source_id]
+    assert set(report.evidence_ids) == {"log:123", diff_id, source_id}
     assert tools.usage.tool_calls == 4
     assert collector.read_repository_response.await_count == 3
 
 
 @pytest.mark.parametrize("resume", [False, True])
-async def test_pages_context_and_report_reach_fixer(resume):
+async def test_pages_context_and_report_reach_fixer(resume, caplog, monkeypatch):
+    monkeypatch.setattr(settings, "AUTO_PCI_AGENT_VERBOSE", True)
+    caplog.set_level("INFO", logger="uvicorn.error.agents")
     packet = reduce_job_log(PAGES_LOG.replace("##[error]", f"{SOURCE}\n##[error]"), 123, "Deploy", "Setup Pages")
     diff_id = f"diff:{CONFIG}"
     context = make_context(
@@ -140,6 +143,7 @@ async def test_pages_context_and_report_reach_fixer(resume):
     model = FakeLLM(
         [("get_changed_file_patch", {"path": CONFIG})],
         ContextSelection(relevant_diffs=["diff:invented.ts", diff_id]),
+        [("inspect_evidence", {"name": "get_changed_file_patch", "path": CONFIG})],
         finding(
             "github_actions", packet, suspected_file=CONFIG,
             likely_root_cause="The Pages action likely cannot rewrite the new function export.",
@@ -162,13 +166,18 @@ async def test_pages_context_and_report_reach_fixer(resume):
             relevant_diffs=state["execution"].relevant_diffs,
         )
     assert state["fix"] == proposal and state["fix"].verified is False
-    assert model.prompts[2][1]["evidence"] == state["context"].evidence
-    assert model.prompts[3][1]["context"] == state["context"].evidence
-    assert model.prompts[3][1]["investigation_report"] == report.model_dump()
+    assert set(model.prompts[2][1]["evidence"]) == {"log:123"}
+    assert model.prompts[4][1]["context"] == state["context"].evidence
+    assert model.prompts[4][1]["investigation_report"] == report.model_dump()
     assert {"evidence_id": diff_id} in model.transcripts[1]
-    assert {"evidence_id": f"source:{CONFIG}", "text": SOURCE} in model.transcripts[4]
+    assert {"evidence_id": f"source:{CONFIG}", "text": SOURCE} in model.transcripts[5]
     assert reader.read_files.await_args.args[0] == context.head_sha
     assert reader.read_files.await_args.args[1][0] == CONFIG
+    assert "[context_agent] Tool started: get_changed_file_patch" in caplog.text
+    assert "[investigation_agent] Model turn 1/4" in caplog.text
+    assert f"[fixing_agent] Tool returned: read_fix_source path={CONFIG}" in caplog.text
+    assert "[fixing_agent] Finished structured_response=True" in caplog.text
+    assert EXPORT not in caplog.text
 
 
 async def test_logged_change_can_reach_fixer_when_cause_is_unconfirmed():
@@ -179,6 +188,7 @@ async def test_logged_change_can_reach_fixer_when_cause_is_unconfirmed():
     )
     model = FakeLLM(
         ContextSelection(relevant_diffs=[diff_id]),
+        [("inspect_evidence", {"name": "get_changed_file_patch", "path": CONFIG})],
         finding("github_actions", packet, suspected_file=CONFIG, evidence_ids=["log:123", diff_id]),
         FixSuggestion(status="insufficient_evidence", summary="No verified edit", rationale="Cause remains unknown."),
     )
@@ -187,4 +197,4 @@ async def test_logged_change_can_reach_fixer_when_cause_is_unconfirmed():
     assert state["investigation_report"].possible_cause is None
     assert state["investigation_report"].suspected_file == CONFIG
     assert state["fix"].status == "insufficient_evidence"
-    assert model.prompts[2][1]["investigation_report"]["suspected_file"] == CONFIG
+    assert model.prompts[3][1]["investigation_report"]["suspected_file"] == CONFIG

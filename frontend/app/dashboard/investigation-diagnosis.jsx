@@ -43,11 +43,12 @@ function InlineCode({ text }) {
 
 export function Diagnosis({ diagnosis, evidence, status }) {
   const primary = evidence?.failure_packets?.find((packet) => diagnosis?.evidence_ids?.[0] === `log:${packet.job_id}`);
-  const suspect = diagnosis?.suspected_file;
+  const match = evidence?.logged_changes?.length === 1 ? evidence.logged_changes[0] : null;
+  const suspect = diagnosis?.suspected_file || match?.path;
   const suspectAnchor = suspect && evidence?.changed_files?.some((file) => file.filename === suspect)
     ? evidenceAnchor(`diff:${suspect}`)
     : null;
-  const hasLikelyCause = diagnosis?.possible_cause && diagnosis.root_cause === unconfirmedRootCause;
+  const showRootCause = diagnosis?.root_cause && diagnosis.root_cause !== unconfirmedRootCause;
 
   return (
     <section aria-labelledby="ai-heading" className="space-y-4 rounded-md border border-line bg-panel p-4 sm:p-5">
@@ -60,7 +61,7 @@ export function Diagnosis({ diagnosis, evidence, status }) {
             </p>
           )}
           <p className="max-w-[70ch] leading-relaxed wrap-break-word whitespace-pre-wrap"><InlineCode text={diagnosis.summary} /></p>
-          {!hasLikelyCause && (
+          {showRootCause && (
             <div>
               <h3 className="text-sm font-semibold">Root cause</h3>
               <p className="mt-1 max-w-[75ch] text-sm leading-relaxed wrap-break-word whitespace-pre-wrap text-muted"><InlineCode text={diagnosis.root_cause} /></p>
@@ -68,7 +69,7 @@ export function Diagnosis({ diagnosis, evidence, status }) {
           )}
           {diagnosis.possible_cause && (
             <div>
-              <h3 className="text-sm font-semibold">{hasLikelyCause ? "Likely cause" : "Possible cause"}</h3>
+              <h3 className="text-sm font-semibold">{showRootCause ? "Possible cause" : "Likely cause"}</h3>
               <p className="mt-1 max-w-[75ch] text-sm leading-relaxed wrap-break-word whitespace-pre-wrap text-muted"><InlineCode text={diagnosis.possible_cause} /></p>
             </div>
           )}
@@ -78,6 +79,12 @@ export function Diagnosis({ diagnosis, evidence, status }) {
               {suspectAnchor ? (
                 <a href={`#${encodeURIComponent(suspectAnchor)}`} className="font-mono text-accent underline underline-offset-4" onClick={() => revealEvidence(suspectAnchor)}>{suspect}</a>
               ) : <code className="font-mono">{suspect}</code>}
+            </p>
+          )}
+          {!diagnosis.possible_cause && match && (
+            <p className="text-sm wrap-break-word">
+              The failed job printed this changed line{" "}
+              <code className="font-mono text-foreground">{match.line}</code>
             </p>
           )}
           <div className="space-y-2 rounded-sm border border-line bg-background p-3">

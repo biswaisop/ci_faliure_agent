@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     GITHUB_APP_CLIENT_SECRET: str = os.getenv("GITHUB_APP_CLIENT_SECRET", "")
     AUTO_PCI_PR_COMMENTS: bool = False
     AUTO_PCI_FIX_SUGGESTIONS: bool = False
+    AUTO_PCI_AGENT_VERBOSE: bool = True
     AUTO_PCI_INVESTIGATION_LIMITS: InvestigationLimits = InvestigationLimits()
     
 
