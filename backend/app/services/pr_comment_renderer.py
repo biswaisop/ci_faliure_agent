@@ -66,6 +66,10 @@ def render_pr_comment(
         "### What failed",
         safe_text(diagnosis.summary, 300) if diagnosis else "A diagnosis is unavailable.",
     ]
+    if diagnosis and diagnosis.evidence_ids:
+        primary = next((packet for packet in context.failure_packets if diagnosis.evidence_ids[0] == f"log:{packet.job_id}"), None)
+        if primary and primary.failed_step and primary.action:
+            lines.extend(["", f"**Failed step** {safe_text(primary.failed_step)} ({safe_text(primary.action)})"])
     if diagnosis and diagnosis.possible_cause:
         lines.extend(["", "### Possible cause", safe_text(diagnosis.possible_cause, 300)])
     elif diagnosis:

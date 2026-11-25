@@ -80,7 +80,7 @@ class WorkflowRunRepository:
 
     async def list_run_summaries(self, github_repo_id: int, installation_id: int, limit: int) -> list[WorkflowRun]:
         projection = dict.fromkeys((
-            "github_repo_id", "installation_id", "run_id", "run_attempt", "workflow_id", "workflow_name",
+            "github_repo_id", "installation_id", "run_id", "run_attempt", "workflow_id", "workflow_name", "workflow_path",
             "run_number", "head_sha", "head_branch", "conclusion", "html_url", "github_created_at",
             "github_updated_at", "created_at", "updated_at", "evidence.collection_status", "evidence.classification",
         ), 1)

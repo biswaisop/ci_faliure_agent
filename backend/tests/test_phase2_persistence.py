@@ -16,7 +16,12 @@ from app.db.models.github_installation import InstallationMetadata
 from app.db.models.github_repository import RepositoryMetadata
 from app.db.models.membership import VerifiedMembershipGrant
 from app.db.models.webhook_delivery import DeliveryMetadata
-from app.db.models.workflow_run import EvidenceUpdate, FailedJob, WorkflowRunMetadata
+from app.db.models.workflow_run import (
+    EvidenceUpdate,
+    FailedJob,
+    WorkflowRunKey,
+    WorkflowRunMetadata,
+)
 from app.db.mongodb import MongoDb
 from app.db.repositories import UserRepository
 from app.db.repositories.github_installation_repository import (
@@ -32,7 +37,6 @@ from app.db.repositories.workflow_run_repository import (
     WorkflowRunRepository,
 )
 from app.main import app
-from app.schema.diagnosis import DiagnosisResult
 from app.schema.failure_packet import FailurePacket
 from app.services import (
     gh_installations,
@@ -41,14 +45,17 @@ from app.services import (
     webhook_processor,
 )
 from app.services.deduplicator import MongoDeliveryDeduplicator
-from app.services.gh_collector import GitHubCollector
+from app.services.gh_collector import CommitComparison, GitHubCollector
 from app.services.github_authorization_service import GitHubAuthorizationService
+from app.services.github_webhook_event import parse_webhook
+from app.services.log_reducer import reduce_job_log
 from config import settings
 from tests.test_gh_webhook import (
     TEST_SECRET,
     build_workflow_run_payload,
     compute_signature,
 )
+from tests.test_investigation_agent import PAGES_ERROR, PAGES_LOG, FakeLLM, finding
 
 pytestmark = pytest.mark.anyio
 
@@ -195,9 +202,58 @@ async def test_database_failure_rejects_delivery(webhook_client, monkeypatch):
     processor.assert_not_awaited()
 
 
+@pytest.mark.parametrize("model_available", [True, False])
+async def test_pages_investigation_does_not_change_evidence_collection_status(monkeypatch, model_available):
+    payload = build_workflow_run_payload()
+    payload["workflow_run"].update(
+        name="Deploy Next.js site to Pages", path=".github/workflows/pages.yml",
+        head_repository={"id": payload["repository"]["id"]},
+    )
+    event = parse_webhook("workflow_run", payload)
+    collector = Mock(
+        get_failed_jobs=AsyncMock(return_value=[{
+            "id": 77, "name": "deploy", "failed_steps": [{"number": 2, "name": "Setup Pages"}],
+        }]),
+        get_job_log=AsyncMock(return_value=PAGES_LOG),
+        resolve_commit_comparison=AsyncMock(return_value=CommitComparison("not_attempted")),
+    )
+    collection = Mock(update_one=AsyncMock(return_value=Mock(matched_count=1)))
+    runs = Mock(upsert_workflow_run=AsyncMock(), update_collection_status=AsyncMock(),
+                add_failed_jobs=AsyncMock(), update_evidence=AsyncMock())
+    installations = Mock(get_by_installation_id=AsyncMock(return_value=None))
+    repositories = Mock(get_by_repo_id=AsyncMock(return_value=None))
+    token = AsyncMock(return_value="mock-token")
+    monkeypatch.setattr(settings, "AUTO_PCI_FIX_SUGGESTIONS", False)
+    monkeypatch.setattr(settings, "AUTO_PCI_PR_COMMENTS", False)
+    monkeypatch.setattr(MongoDb, "investigations", lambda: collection)
+    monkeypatch.setattr(webhook_processor, "get_installation_token", token)
+    monkeypatch.setattr(webhook_processor, "get_installation_id", AsyncMock(return_value=123))
+    get_llm = Mock(return_value=FakeLLM(finding("github_actions", reduce_job_log(PAGES_LOG, 77, "deploy", "Setup Pages"))))
+    if not model_available:
+        get_llm.side_effect = RuntimeError("NIM configuration unavailable")
+    monkeypatch.setattr(investigation_service, "get_llm", get_llm)
+
+    await webhook_processor.collect_workflow_run(event, runs, installations, repositories, collector)
+
+    assert [call.args[1] for call in runs.update_collection_status.await_args_list] == ["collecting", "completed"]
+    evidence = runs.update_evidence.await_args.args[1]
+    assert evidence.failure_packets[0].action == "actions/configure-pages@v5"
+    assert evidence.investigation_context.workflow_path == ".github/workflows/pages.yml"
+    assert token.await_args.kwargs == {"repository_id": event.repository.github_repo_id}
+    saved = collection.update_one.await_args.args[1]["$set"]
+    if model_available:
+        assert saved["investigation_metadata"]["selected_specialist"] == "github_actions"
+        assert saved["diagnosis"]["summary"] == PAGES_ERROR
+    else:
+        assert saved["status"] == "failed" and saved["error_code"] == "investigation_failed"
+
+
 async def test_signed_failed_run_records_correct_attempt_and_jobs(mongo_db, webhook_client, monkeypatch):
     monkeypatch.setattr(webhook_processor, "get_installation_token", AsyncMock(return_value="mock-token"))
-    monkeypatch.setattr(investigation_service, "get_llm", lambda: object())
+    log = "##[group]Run pytest\nAssertionError: mismatch"
+    packet = reduce_job_log(log, 77, "tests", "test")
+    model = FakeLLM(finding("python", packet))
+    monkeypatch.setattr(investigation_service, "get_llm", lambda: model)
     investigations = InvestigationRepository(MongoDb.investigations())
     processing_statuses = []
     mark_pending = investigations.mark_pending
@@ -206,14 +262,15 @@ async def test_signed_failed_run_records_correct_attempt_and_jobs(mongo_db, webh
         await mark_pending(run)
         processing_statuses.append((await self.get(run))["status"])
 
-    async def diagnose(*, context, **kwargs):
+    invoke = model.ainvoke
+
+    async def diagnose(messages):
+        context = WorkflowRunKey(run_id=12345678, github_repo_id=445566, run_attempt=2)
         processing_statuses.append((await investigations.get(context))["status"])
-        assert context.comparison_status == "available"
-        assert context.changed_files[0].patch == "@@ -1 +1 @@\n-old\n+new"
-        return DiagnosisResult(summary="Test failure", root_cause="Hypothesis", confidence="low")
+        return await invoke(messages)
 
     monkeypatch.setattr(InvestigationRepository, "mark_pending", track_pending)
-    monkeypatch.setattr(investigation_service, "run_investigation", diagnose)
+    monkeypatch.setattr(model, "ainvoke", diagnose)
     calls = []
 
     def github_api(request):
@@ -243,7 +300,7 @@ async def test_signed_failed_run_records_correct_attempt_and_jobs(mongo_db, webh
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(github_api)) as client:
         collector = GitHubCollector(client=client)
-        monkeypatch.setattr(collector, "get_job_log", AsyncMock(return_value=None))
+        monkeypatch.setattr(collector, "get_job_log", AsyncMock(return_value=log))
         monkeypatch.setattr(webhook_processor, "get_github_collector", lambda: collector)
         payload = build_workflow_run_payload()
         payload["workflow_run"].update(
@@ -275,7 +332,9 @@ async def test_signed_failed_run_records_correct_attempt_and_jobs(mongo_db, webh
     assert run.evidence.investigation_context.comparison_status == "available"
     assert run.evidence.investigation_context.changed_files[0].filename == "app.py"
     assert processing_statuses == ["pending", "running"]
-    assert (await investigations.get(run))["status"] == "completed"
+    investigation = await investigations.get(run)
+    assert investigation["status"] == "completed"
+    assert investigation["diagnosis"]["summary"] == "AssertionError: mismatch"
     assert [(job.job_id, job.log_status) for job in run.failed_jobs] == [(77, "not_collected")]
     assert [(step.number, step.name) for step in run.failed_jobs[0].failed_steps] == [(2, "test")]
 

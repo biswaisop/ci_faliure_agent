@@ -108,6 +108,7 @@ def parse_webhook(event: GitHubEvent, payload: dict) -> GitHubWebhook | None:
                 run_attempt=run.get("run_attempt", 1),
                 workflow_id=run.get("workflow_id"),
                 workflow_name=run.get("name") or None,
+                workflow_path=run.get("path") or None,
                 run_number=run.get("run_number"),
                 head_sha=run.get("head_sha"),
                 head_branch=run.get("head_branch"),

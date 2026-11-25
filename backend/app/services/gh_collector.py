@@ -267,6 +267,7 @@ class GitHubCollector:
         *,
         include_active: bool = False,
         created_before: datetime | None = None,
+        first_page_only: bool = False,
     ) -> list[dict[str, Any]]:
         """Fetch completed workflow runs with pagination."""
         url = f"{self.base_url}/repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs"
@@ -309,7 +310,7 @@ class GitHubCollector:
                         "event": run.get("event"),
                     })
 
-                next_url = response.links.get("next", {}).get("url")
+                next_url = None if first_page_only else response.links.get("next", {}).get("url")
                 params = None
 
         return runs

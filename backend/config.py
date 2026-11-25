@@ -3,6 +3,8 @@ import os
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
 
+from app.schema.investigation import InvestigationLimits
+
 load_dotenv()
 
 class Settings(BaseSettings):
@@ -14,6 +16,7 @@ class Settings(BaseSettings):
     GITHUB_APP_CLIENT_SECRET: str = os.getenv("GITHUB_APP_CLIENT_SECRET", "")
     AUTO_PCI_PR_COMMENTS: bool = False
     AUTO_PCI_FIX_SUGGESTIONS: bool = False
+    AUTO_PCI_INVESTIGATION_LIMITS: InvestigationLimits = InvestigationLimits()
     
 
 settings = Settings()
