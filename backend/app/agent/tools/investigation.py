@@ -2,9 +2,11 @@ import asyncio
 import json
 from datetime import datetime
 from pathlib import PurePosixPath
+from typing import Annotated
 
 import httpx
 from langchain.tools import tool
+from pydantic import Field
 
 from app.agent.investigation_router import JS_SUFFIXES
 from app.schema.investigation import (
@@ -14,10 +16,19 @@ from app.schema.investigation import (
     ToolRequest,
 )
 from app.schema.investigation_context import InvestigationContext
-from app.services.gh_collector import GitHubCollector, github_failure_reason
+from app.services.gh_collector import (
+    COMPARE_FILE_LIMIT,
+    GitHubCollector,
+    github_failure_reason,
+)
 from app.services.github_pr_resolver import COMMIT_SHA
-from app.services.github_source_reader import GitHubSourceReader, source_path_allowed
+from app.services.github_source_reader import (
+    GitHubSourceReader,
+    repository_path_allowed,
+    source_path_allowed,
+)
 from app.services.github_webhook_event import RepositoryLocator
+from app.services.log_reducer import strip_masked_inputs
 from app.services.pr_comment_renderer import SENSITIVE_TEXT
 
 PY_CONFIG = {"pyproject.toml", "requirements.txt", "uv.lock", "poetry.lock", "pytest.ini"}
@@ -42,6 +53,10 @@ class InvestigationTools:
         if repo is not None and (repo.owner in {".", ".."} or repo.name in {".", ".."}):
             raise ValueError("Invalid investigation repository")
         self.context = context
+        self.changed_files = {
+            file.filename: file for file in context.changed_files[:COMPARE_FILE_LIMIT]
+            if repository_path_allowed(file.filename)
+        }
         self.limits = limits
         self.usage = InvestigationUsage()
         self.evidence: dict[str, str] = {}
@@ -126,16 +141,19 @@ class InvestigationTools:
             start = request.start_line - 1
             lines = packet.relevant_log.splitlines()[start:start + min(request.max_lines, self.limits.log_lines)]
             if lines:
-                return self._reply(evidence_id=f"log:{packet.job_id}:{start + 1}-{start + len(lines)}", text="\n".join(lines))
+                return self._reply(
+                    evidence_id=f"log:{packet.job_id}:{start + 1}-{start + len(lines)}",
+                    text=strip_masked_inputs("\n".join(lines)),
+                )
             return self._reply(limitation="The requested reduced log lines are unavailable.")
 
         if request.name == "get_commit_diff_summary":
             return self._reply(evidence_id=f"comparison:{context.run_id}", text=json.dumps({
                 "status": context.comparison_status, "reason": context.comparison_reason,
-                "files": [item.filename for item in context.changed_files[:50]],
+                "files": list(self.changed_files),
             }))
         if request.name == "get_changed_file_patch":
-            file = next((item for item in context.changed_files if item.filename == request.path), None)
+            file = self.changed_files.get(request.path)
             if file is None or not file.patch:
                 return self._reply(limitation="The requested changed-file patch is unavailable.")
             evidence_id = f"diff:{file.filename}"
@@ -194,6 +212,8 @@ class InvestigationTools:
                 path == self.context.workflow_path and file.parent.as_posix() == ".github/workflows"
                 and file.suffix in {".yml", ".yaml"}
             )
+        if path in self.changed_files:
+            return True
         python = file.suffix == ".py" or file.name in PY_CONFIG
         javascript = file.suffix in JS_SUFFIXES or file.name in JS_CONFIG
         if specialist == "python":
@@ -205,6 +225,26 @@ class InvestigationTools:
 
 def investigation_tools(registry: InvestigationTools, specialist: Specialist, can_read):
     sent = registry.evidence.copy()
+
+    @tool
+    async def inspect_changed_file(path: Annotated[str, Field(max_length=200)]) -> dict:
+        """Inspect a path from changed_files. Return its comparison patch and source at the failed commit."""
+        if not can_read():
+            registry.limitations.add("The investigation model-tool budget was exhausted.")
+            return {"unavailable": "Report a finding from the evidence already collected."}
+        file = registry.changed_files.get(path)
+        if file is None:
+            return {"unavailable": "Choose a path from changed_files."}
+        result = {}
+        if file.patch:
+            result["patch"] = await registry.model_result(
+                ToolRequest(name="get_changed_file_patch", path=path), specialist, sent,
+            )
+        if file.status != "removed" and source_path_allowed(path):
+            result["source"] = await registry.model_result(
+                ToolRequest(name="read_repository_file", path=path), specialist, sent,
+            )
+        return result or {"unavailable": "The changed file has no patch or current source."}
 
     @tool(args_schema=ToolRequest)
     async def inspect_evidence(
@@ -219,4 +259,6 @@ def investigation_tools(registry: InvestigationTools, specialist: Specialist, ca
             name=name, path=path, job_id=job_id, start_line=start_line, max_lines=max_lines, limit=limit,
         ), specialist, sent)
 
-    return [inspect_evidence] if registry.usage.tool_calls < registry.limits.tool_calls else []
+    if registry.usage.tool_calls >= registry.limits.tool_calls:
+        return []
+    return [inspect_changed_file, inspect_evidence] if registry.changed_files else [inspect_evidence]

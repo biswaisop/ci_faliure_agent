@@ -74,6 +74,34 @@ test("renders diagnosis hierarchy, distinct confidence, and safe evidence links"
   assert.equal(details.open && focused && scrolled, true);
 });
 
+test("shows the failed action, likely cause and implicated diff together", () => {
+  const filename = "next.config.mjs";
+  const html = renderToStaticMarkup(createElement(Diagnosis, {
+    status: "completed",
+    evidence: {
+      ...evidence,
+      failure_packets: [{ job_id: "12", failed_step: "Setup Pages", action: "actions/configure-pages@v5" }],
+      changed_files: [{ filename }],
+    },
+    diagnosis: {
+      summary: "TypeError: error must be an instance of Error",
+      root_cause: "The underlying cause could not be confirmed from the collected evidence.",
+      possible_cause: "The action likely could not rewrite a function export.",
+      suspected_file: filename,
+      confidence: "high",
+      suggested_actions: [],
+      evidence_ids: ["log:12", `diff:${filename}`, `source:${filename}@abc`],
+      unsupported_evidence_ids: [],
+      evidence_validated: true,
+    },
+  }));
+  assert.match(html, /Setup Pages<\/strong> failed while running .*actions\/configure-pages@v5/);
+  assert.match(html, /Likely cause.*could not rewrite a function export/);
+  assert.match(html, /source:next\.config\.mjs@abc \(inspected source\)/);
+  assert.doesNotMatch(html, /underlying cause could not be confirmed/);
+  assert.ok(html.includes(`href="#${encodeURIComponent(evidenceAnchor(`diff:${filename}`))}"`));
+});
+
 test("renders comparison outcomes and the corresponding safe unified diff", () => {
   const unavailable = renderToStaticMarkup(createElement(EvidenceExplorer, { evidence }));
   assert.match(unavailable, /No earlier successful attempt was found/);

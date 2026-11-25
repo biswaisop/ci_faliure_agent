@@ -22,6 +22,7 @@ ERROR_RE = re.compile(
 ACTION = r"[\w.-]+/[\w./-]+@[\w./-]+"
 ACTION_FRAME = re.compile(r"[/\\]_actions[/\\]([\w.-]+)[/\\]([\w.-]+)[/\\]([\w.-]+)[/\\]")
 RUN_GROUP = re.compile(r"^##\[group\]Run (.+)")
+MASKED_INPUT = re.compile(r"^\s*[\w-]+\s*:\s*\*{3,}\s*$")
 WARNING = re.compile(r"^\s*(?:##\[warning\]|(?:npm )?warn(?:ing)?\b)|Node\.js \d+ is deprecated|forced to run on Node\.js", re.IGNORECASE)
 NODE_WARNING = re.compile(r"Node\.js \d+ is deprecated|forced to run on Node\.js", re.IGNORECASE)
 EXIT = re.compile(r"^##\[error\]Process completed with exit code", re.IGNORECASE)
@@ -53,6 +54,10 @@ def clean_log(raw_log: str) -> list[str]:
         cleaned.append(line.rstrip())
 
     return cleaned
+
+
+def strip_masked_inputs(log: str) -> str:
+    return "\n".join(line for line in log.splitlines() if not MASKED_INPUT.fullmatch(line))
 
 
 def extract_failing_tests(lines: list[str]) -> list[str]:
@@ -209,14 +214,27 @@ def reduce_job_log(
         lines = lines[start:end]
 
     error_type, error_message, error_index = extract_error(lines)
-    command = next((match[1] for line in reversed(lines[:error_index + 1] if error_index is not None else lines)
-                    if (match := RUN_GROUP.match(line))), "")
+    last_before_error = error_index if error_index is not None else len(lines) - 1
+    run_start, command = next(
+        ((index, match[1]) for index in range(last_before_error, -1, -1) if (match := RUN_GROUP.match(lines[index]))),
+        (0, ""),
+    )
     action = named_action[0] if named_action else command if re.fullmatch(ACTION, command) else None
     anchor = error_index if error_index is not None else max(0, len(lines) - 10)
-    excerpt_lines = lines[max(0, anchor - 25):anchor + 11]
+    start = max(0, anchor - 25)
+    end = min(len(lines), anchor + 11)
+    if action:
+        start = max(run_start, anchor - 40)
+        end = next((
+            index for index in range(anchor + 1, end)
+            if lines[index].startswith("Post job cleanup.") or RUN_GROUP.match(lines[index])
+        ), end)
+    excerpt_lines = lines[start:end]
     # Keep the selected line in the excerpt even when surrounding frames are unusually long.
-    relevant_log = "\n".join(line[:500] if index != min(anchor, 25) else line[:2000]
-                             for index, line in enumerate(excerpt_lines))
+    relevant_log = strip_masked_inputs("\n".join(
+        line[:2000] if index == anchor else line[:500]
+        for index, line in enumerate(excerpt_lines, start=start)
+    ))
     failing_tests = extract_failing_tests(lines)[:20]
     signature = f"{error_type}: {error_message}" if error_type else error_message
     routing_excerpt = "\n".join(line for line in excerpt_lines if not WARNING.search(line))
