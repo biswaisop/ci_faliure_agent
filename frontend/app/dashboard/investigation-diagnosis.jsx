@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import Markdown from "react-markdown";
 import { apiFetch } from "../../lib/api.js";
+import { EvidenceCode } from "./evidence-code";
 import { comparisonLabel } from "./evidence-format";
 
 const investigationMessages = {
@@ -36,10 +37,53 @@ function Citations({ diagnosis, evidence }) {
   );
 }
 
-export function ReportMarkdown({ text }) {
+const ReportEvidence = createContext(null);
+
+function ReportParagraph({ node, children }) {
+  const evidence = useContext(ReportEvidence);
+  const [code] = node.children;
+  if (!evidence?.path || node.children.length !== 1 || code.tagName !== "code"
+    || code.children[0]?.value !== evidence.path) return <p>{children}</p>;
+
   return (
-    <div className="max-w-[75ch] space-y-2 wrap-break-word text-sm leading-relaxed text-muted [&_h3]:mt-4 [&_h3]:font-semibold [&_h3]:text-foreground [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-5 [&_ol]:pl-5 [&_code]:font-mono [&_code]:text-foreground [&_pre]:overflow-x-auto [&_pre]:rounded-sm [&_pre]:bg-background [&_pre]:p-3">
-      <Markdown disallowedElements={["a", "img"]} unwrapDisallowed>{text}</Markdown>
+    <details className="min-w-0 rounded-sm border border-line bg-background">
+      <summary className="cursor-pointer rounded-sm px-3 py-2 text-accent hover:bg-accent-soft focus-visible:outline-2 focus-visible:outline-accent">
+        <span className="font-mono">{evidence.path}</span>
+        <span className="ml-2 text-xs text-muted">Diff and failure logs</span>
+      </summary>
+      <div className="space-y-4 border-t border-line p-3">
+        {evidence.patch ? <EvidenceCode kind="diff" text={evidence.patch} /> : (
+          <p>No diff was saved for this file.</p>
+        )}
+        {evidence.logs.length ? evidence.logs.map((packet) => (
+          <section key={packet.job_id} className="space-y-1">
+            <h4 className="font-semibold text-foreground">
+              {packet.job_name || `Job ${packet.job_id}`}{packet.failed_step && ` · ${packet.failed_step}`}
+            </h4>
+            <EvidenceCode kind="log" text={packet.relevant_log} />
+          </section>
+        )) : <p>No failure log excerpts were collected for this run.</p>}
+      </div>
+    </details>
+  );
+}
+
+const reportComponents = { p: ReportParagraph };
+
+export function ReportMarkdown({ text, evidence, diagnosis }) {
+  const matches = evidence?.logged_changes;
+  const path = diagnosis?.suspected_file || (matches?.length === 1 ? matches[0].path : null);
+  const fileEvidence = path ? {
+    path,
+    patch: evidence?.changed_files.find((file) => file.filename === path)?.patch,
+    logs: evidence?.failure_packets.filter((packet) => packet.relevant_log?.trim()) || [],
+  } : null;
+
+  return (
+    <div className="max-w-[75ch] space-y-2 wrap-break-word text-sm leading-relaxed text-muted [&_h3]:mt-4 [&_h3]:font-semibold [&_h3]:text-foreground [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-5 [&_ol]:pl-5 [&_code]:font-mono [&>pre]:overflow-x-auto [&>pre]:rounded-sm [&>pre]:bg-background [&>pre]:p-3">
+      <ReportEvidence.Provider value={fileEvidence}>
+        <Markdown components={reportComponents} disallowedElements={["a", "img"]} unwrapDisallowed>{text}</Markdown>
+      </ReportEvidence.Provider>
     </div>
   );
 }
@@ -59,7 +103,7 @@ export async function readMarkdown(body, onText) {
   }
 }
 
-function StreamedReport({ runPath, getToken }) {
+function StreamedReport({ runPath, getToken, evidence, diagnosis }) {
   const [attempt, setAttempt] = useState(0);
   const [report, setReport] = useState(null);
   const current = report?.attempt === attempt ? report : null;
@@ -91,7 +135,7 @@ function StreamedReport({ runPath, getToken }) {
 
   return (
     <div aria-busy={!current || current.status === "streaming"}>
-      {current?.text && <ReportMarkdown text={current.text} />}
+      {current?.text && <ReportMarkdown text={current.text} evidence={evidence} diagnosis={diagnosis} />}
       {!current?.text && current?.status !== "failed" && <p role="status" className="text-sm text-muted">Loading investigation report…</p>}
       {current?.status === "failed" && (
         <p role="alert" className="text-sm text-failure">
@@ -109,7 +153,7 @@ export function Diagnosis({ diagnosis, evidence, status, runPath, getToken }) {
       <h2 id="ai-heading" className="text-lg font-semibold">AI diagnosis</h2>
       {status === "completed" && diagnosis ? (
         <>
-          <StreamedReport runPath={runPath} getToken={getToken} />
+          <StreamedReport runPath={runPath} getToken={getToken} evidence={evidence} diagnosis={diagnosis} />
           {evidence.comparison_status !== "available" && (
             <p className="text-xs text-muted">{comparisonLabel(evidence)}</p>
           )}
