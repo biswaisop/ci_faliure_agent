@@ -31,6 +31,7 @@ class DiagnosisResult(DiagnosisFields):
 
     summary: str
     root_cause: str
+    suspected_file: str | None = Field(default=None, max_length=200)
     unsupported_evidence_ids: list[str] = Field(
         default_factory=list
     )

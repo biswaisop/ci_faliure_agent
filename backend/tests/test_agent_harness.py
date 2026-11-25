@@ -1,0 +1,92 @@
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+from app.agent.harness import run_harness
+from app.schema.fix_suggestion import FixSuggestion, SuggestedFileChange
+from app.schema.investigation import ContextSelection
+from app.schema.investigation_context import ChangedFile
+from app.services.failure_classifier import classify_failure
+from app.services.log_reducer import reduce_job_log
+from tests.test_investigation_agent import PAGES_LOG, FakeLLM, finding, make_context
+
+pytestmark = pytest.mark.anyio
+CONFIG = "next.config.mjs"
+EXPORT = "export default function config(phase) {"
+ORIGINAL = f"{EXPORT}\n  return nextConfig;\n}}"
+SOURCE = f'const nextConfig = {{ output: "export" }};\n{ORIGINAL}\n'
+
+
+@pytest.mark.parametrize("resume", [False, True])
+async def test_pages_context_and_report_reach_fixer(resume):
+    packet = reduce_job_log(PAGES_LOG.replace("##[error]", f"{SOURCE}\n##[error]"), 123, "Deploy", "Setup Pages")
+    diff_id = f"diff:{CONFIG}"
+    context = make_context(
+        packet, comparison_status="available", diff_available=True,
+        changed_files=[
+            ChangedFile(filename="app.ts", status="modified", patch="+const unrelated = true;"),
+            ChangedFile(filename=CONFIG, status="modified", patch=f"-export default nextConfig;\n+{EXPORT}"),
+        ],
+    )
+    classification = classify_failure(context)
+    proposal = FixSuggestion(
+        status="suggested", summary="Export the configuration object", rationale="The action rewrites an object export.",
+        changes=[SuggestedFileChange(
+            path=CONFIG, original_snippet=ORIGINAL, replacement_snippet="export default nextConfig;",
+            explanation="Expose the already configured static export object to the action.",
+        )],
+        evidence_ids=["log:123", diff_id, f"source:{CONFIG}"],
+        tests_to_run=["Rerun the Pages workflow"],
+    )
+    model = FakeLLM(
+        [("get_changed_file_patch", {"path": CONFIG})],
+        ContextSelection(relevant_diffs=["diff:invented.ts", diff_id]),
+        finding(
+            "github_actions", packet, suspected_file=CONFIG,
+            likely_root_cause="The Pages action likely cannot rewrite the new function export.",
+            confidence="medium", cause_evidence_id=diff_id, cause_quote=EXPORT, evidence_ids=["log:123", diff_id],
+        ),
+        [("read_fix_source", {"path": CONFIG})],
+        proposal,
+    )
+    reader = SimpleNamespace(read_files=AsyncMock(return_value={CONFIG: SOURCE}))
+    state = await run_harness(context=context, classification=classification, llm=model, reader=None if resume else reader)
+    report = state["investigation_report"]
+    assert report.suspected_file == CONFIG and report.possible_cause
+    assert report.regression_attribution == "possible"
+    assert state["context"].relevant_diffs == [diff_id]
+    if resume:
+        assert "fix" not in state
+        reader.read_files.assert_not_awaited()
+        state = await run_harness(
+            context=context, classification=classification, llm=model, reader=reader, diagnosis=report,
+            relevant_diffs=state["execution"].relevant_diffs,
+        )
+    assert state["fix"] == proposal and state["fix"].verified is False
+    assert model.prompts[2][1]["evidence"] == state["context"].evidence
+    assert model.prompts[3][1]["context"] == state["context"].evidence
+    assert model.prompts[3][1]["investigation_report"] == report.model_dump()
+    assert {"evidence_id": diff_id} in model.transcripts[1]
+    assert {"evidence_id": f"source:{CONFIG}", "text": SOURCE} in model.transcripts[4]
+    assert reader.read_files.await_args.args[0] == context.head_sha
+    assert reader.read_files.await_args.args[1][0] == CONFIG
+
+
+async def test_logged_change_can_reach_fixer_when_cause_is_unconfirmed():
+    packet = reduce_job_log(PAGES_LOG.replace("##[error]", f"{EXPORT}\n##[error]"), 123, "Deploy", "Setup Pages")
+    diff_id = f"diff:{CONFIG}"
+    context = make_context(
+        packet, changed_files=[ChangedFile(filename=CONFIG, status="modified", patch=f"+{EXPORT}")],
+    )
+    model = FakeLLM(
+        ContextSelection(relevant_diffs=[diff_id]),
+        finding("github_actions", packet, suspected_file=CONFIG, evidence_ids=["log:123", diff_id]),
+        FixSuggestion(status="insufficient_evidence", summary="No verified edit", rationale="Cause remains unknown."),
+    )
+    reader = SimpleNamespace(read_files=AsyncMock(return_value={CONFIG: SOURCE}))
+    state = await run_harness(context=context, classification=classify_failure(context), llm=model, reader=reader)
+    assert state["investigation_report"].possible_cause is None
+    assert state["investigation_report"].suspected_file == CONFIG
+    assert state["fix"].status == "insufficient_evidence"
+    assert model.prompts[2][1]["investigation_report"]["suspected_file"] == CONFIG

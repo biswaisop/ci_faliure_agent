@@ -38,6 +38,7 @@ from app.db.repositories.workflow_run_repository import (
 )
 from app.main import app
 from app.schema.failure_packet import FailurePacket
+from app.schema.investigation import ContextSelection
 from app.services import (
     gh_installations,
     github_sync_service,
@@ -252,7 +253,7 @@ async def test_signed_failed_run_records_correct_attempt_and_jobs(mongo_db, webh
     monkeypatch.setattr(webhook_processor, "get_installation_token", AsyncMock(return_value="mock-token"))
     log = "##[group]Run pytest\nAssertionError: mismatch"
     packet = reduce_job_log(log, 77, "tests", "test")
-    model = FakeLLM(finding("python", packet))
+    model = FakeLLM(ContextSelection(relevant_diffs=["diff:app.py"]), finding("python", packet))
     monkeypatch.setattr(investigation_service, "get_llm", lambda: model)
     investigations = InvestigationRepository(MongoDb.investigations())
     processing_statuses = []
@@ -262,15 +263,13 @@ async def test_signed_failed_run_records_correct_attempt_and_jobs(mongo_db, webh
         await mark_pending(run)
         processing_statuses.append((await self.get(run))["status"])
 
-    invoke = model.ainvoke
-
     async def diagnose(messages):
-        context = WorkflowRunKey(run_id=12345678, github_repo_id=445566, run_attempt=2)
-        processing_statuses.append((await investigations.get(context))["status"])
-        return await invoke(messages)
+        if "Investigate this CI failure" in messages[0].content:
+            context = WorkflowRunKey(run_id=12345678, github_repo_id=445566, run_attempt=2)
+            processing_statuses.append((await investigations.get(context))["status"])
 
     monkeypatch.setattr(InvestigationRepository, "mark_pending", track_pending)
-    monkeypatch.setattr(model, "ainvoke", diagnose)
+    model._before_reply = diagnose
     calls = []
 
     def github_api(request):

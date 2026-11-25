@@ -2,7 +2,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-INVESTIGATION_VERSION = "specialists-v1"
+INVESTIGATION_VERSION = "agent-harness-v1"
 Specialist = Literal["python", "javascript", "github_actions"]
 Confidence = Literal["high", "medium", "low", "insufficient_evidence"]
 EvidenceID = Annotated[str, Field(max_length=300)]
@@ -41,6 +41,7 @@ class SpecialistFinding(BaseModel):
     specialist: Specialist
     observed_failure: FindingText | None = None
     likely_root_cause: FindingText | None = None
+    suspected_file: Annotated[str, Field(max_length=200)] | None = None
     confidence: Confidence
     evidence_ids: list[EvidenceID] = Field(default_factory=list, max_length=20)
     investigated_files: list[EvidenceID] = Field(default_factory=list, max_length=6)
@@ -53,9 +54,13 @@ class SpecialistFinding(BaseModel):
     cause_quote: FindingText | None = None
 
 
-class SpecialistTurn(BaseModel):
-    finding: SpecialistFinding | None = None
-    tool_requests: list[ToolRequest] = Field(default_factory=list, max_length=6)
+class ContextSelection(BaseModel):
+    relevant_diffs: list[EvidenceID] = Field(default_factory=list, max_length=10)
+
+
+class PreparedContext(BaseModel):
+    evidence: dict[str, str] = Field(default_factory=dict)
+    relevant_diffs: list[EvidenceID] = Field(default_factory=list, max_length=10)
 
 
 class RoutingDecision(BaseModel):
@@ -66,6 +71,7 @@ class RoutingDecision(BaseModel):
 class InvestigationUsage(BaseModel):
     consultations: int = 0
     model_turns: int = 0
+    context_model_turns: int = 0
     routing_turns: int = 0
     tool_calls: int = 0
     github_calls: int = 0

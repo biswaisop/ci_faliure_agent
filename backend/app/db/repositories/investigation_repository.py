@@ -31,6 +31,7 @@ class InvestigationRepository:
         projection = {"status": 1, "diagnosis": 1}
         if include_fix_sources:
             projection["fix_sources"] = 1
+            projection["investigation_metadata.relevant_diffs"] = 1
         return await self.collection.find_one(self._key(run), projection)
 
     async def list_statuses(self, github_repo_id: int, runs) -> dict:
@@ -92,6 +93,7 @@ class InvestigationRepository:
                     "consulted_specialists": execution.consulted, "evidence_ids": execution.evidence_ids,
                     "findings": [item.model_dump(mode="json") for item in execution.findings],
                     "usage": execution.usage.model_dump(mode="json"),
+                    "relevant_diffs": execution.relevant_diffs,
                 },
             }
             if retain_sources and execution.sources:
