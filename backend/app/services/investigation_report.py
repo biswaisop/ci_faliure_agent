@@ -1,6 +1,5 @@
 import re
 from collections.abc import AsyncIterator
-from urllib.parse import quote
 
 from app.schema.diagnosis import UNCONFIRMED_ROOT_CAUSE, DiagnosisResult
 from app.schema.failure_packet import FailurePacket
@@ -35,13 +34,7 @@ async def report_sections(
     if not suspect and len(matches) == 1:
         suspect = next(iter(matches))
     if suspect:
-        label = inline_code(suspect)
-        if any(file.filename == suspect for file in files):
-            # Match the two URL encodings used by the dashboard's evidence anchors.
-            safe = "!~*'()"
-            anchor = f"evidence-{quote(f'diff:{suspect}', safe=safe)}"
-            label = f"[{label}](#{quote(anchor, safe=safe)})"
-        yield f"### Suspected file\n\n{label}\n\n"
+        yield f"### Suspected file\n\n{inline_code(suspect)}\n\n"
         if not diagnosis.possible_cause and suspect in matches:
             yield f"The failed job printed this changed line {inline_code(matches[suspect])}.\n\n"
 

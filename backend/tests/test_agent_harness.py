@@ -1,4 +1,3 @@
-import base64
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -11,7 +10,6 @@ from app.schema.fix_suggestion import FixSuggestion, SuggestedFileChange
 from app.schema.investigation import ContextSelection, InvestigationLimits
 from app.schema.investigation_context import ChangedFile
 from app.services.failure_classifier import classify_failure
-from app.services.github_webhook_event import RepositoryLocator
 from app.services.log_reducer import reduce_job_log
 from config import settings
 from tests.test_investigation_agent import PAGES_LOG, FakeLLM, finding, make_context
@@ -65,56 +63,32 @@ export default function config(phase) {
         changed_files=[
             ChangedFile(filename="app.ts", status="modified", patch="+const unrelated = true;"),
             ChangedFile(filename=CONFIG, status="modified", patch=f"-export default nextConfig;\n+{EXPORT}"),
+            ChangedFile(filename="docs/design notes.md", status="modified"),
         ],
     )
-
-    async def read_response(path, token, **kwargs):
-        assert token == "repository-scoped"
-        prefix = "/repos/biswaisop/portFolio/git"
-        if path == f"{prefix}/commits/{context.head_sha}":
-            return json.dumps({"sha": context.head_sha, "tree": {"sha": "b" * 40}}).encode()
-        if path == f"{prefix}/trees/{'b' * 40}":
-            return json.dumps({"tree": [
-                {"path": CONFIG, "sha": "c" * 40, "mode": "100644", "type": "blob", "size": len(config.encode())},
-            ]}).encode()
-        assert path == f"{prefix}/blobs/{'c' * 40}"
-        return json.dumps({
-            "encoding": "base64", "content": base64.b64encode(config.encode()).decode(), "sha": "c" * 40,
-        }).encode()
-
-    collector = SimpleNamespace(read_repository_response=AsyncMock(side_effect=read_response))
-    tools = InvestigationTools(
-        context, InvestigationLimits(tool_calls=4), github=collector,
-        repo=RepositoryLocator(owner="biswaisop", name="portFolio", github_repo_id=100), token="repository-scoped",
-    )
-    source_id = f"source:{CONFIG}@{context.head_sha}"
+    tools = InvestigationTools(context, InvestigationLimits())
     cause = "The Pages action likely could not inject the export setting after the config changed to a function export."
     model = FakeLLM(
-        [("get_changed_file_patch", {"path": "app.ts"})] * 3,
         ContextSelection(relevant_diffs=["diff:app.ts"]),
-        [("inspect_changed_file", {"path": CONFIG})],
         finding(
             "github_actions", packet, likely_root_cause=cause, confidence="medium", suspected_file=CONFIG,
             observed_failure="GitHub Pages stopped during configuration.",
-            evidence_ids=[source_id], investigated_files=[CONFIG],
+            cause_evidence_id="log:123", cause_quote=EXPORT,
         ),
     )
     state = await run_harness(context=context, classification=classify_failure(context), llm=model, tools=tools)
-    payload = model.prompts[2][1]
-    assert payload["changed_files"] == ["app.ts", CONFIG] and set(payload["evidence"]) == {"log:123"}
+    payload = model.prompts[1][1]
+    assert payload["changed_files"] == ["app.ts", CONFIG, "docs/design notes.md"]
+    assert set(payload["evidence"]) == {"log:123"}
     log = json.loads(payload["evidence"]["log:123"])["relevant_log"]
     assert "Injecting property=output and value=export" in log and EXPORT in log
     assert "token:" not in log and "Post job cleanup" not in log and "Cache restored" not in log
-    assert any("unavailable" in response for response in model.transcripts[1])
-    inspected = model.transcripts[3][0]
-    assert inspected["patch"]["evidence_id"] == diff_id
-    assert inspected["source"] == {"evidence_id": source_id, "evidence": config}
     report = state["investigation_report"]
     assert report.possible_cause == cause and report.suspected_file == CONFIG
-    assert report.regression_attribution == "possible"
-    assert set(report.evidence_ids) == {"log:123", diff_id, source_id}
-    assert tools.usage.tool_calls == 4
-    assert collector.read_repository_response.await_count == 3
+    assert report.regression_attribution == "insufficient_evidence"
+    assert report.evidence_ids == ["log:123"]
+    assert state["context"].relevant_diffs == [diff_id]
+    assert tools.usage.model_turns == 1 and tools.usage.tool_calls == 0
 
 
 @pytest.mark.parametrize("resume", [False, True])
@@ -143,11 +117,10 @@ async def test_pages_context_and_report_reach_fixer(resume, caplog, monkeypatch)
     model = FakeLLM(
         [("get_changed_file_patch", {"path": CONFIG})],
         ContextSelection(relevant_diffs=["diff:invented.ts", diff_id]),
-        [("inspect_evidence", {"name": "get_changed_file_patch", "path": CONFIG})],
         finding(
             "github_actions", packet, suspected_file=CONFIG,
             likely_root_cause="The Pages action likely cannot rewrite the new function export.",
-            confidence="medium", cause_evidence_id=diff_id, cause_quote=EXPORT, evidence_ids=["log:123", diff_id],
+            confidence="medium", cause_evidence_id="log:123", cause_quote=EXPORT,
         ),
         [("read_fix_source", {"path": CONFIG})],
         proposal,
@@ -156,7 +129,7 @@ async def test_pages_context_and_report_reach_fixer(resume, caplog, monkeypatch)
     state = await run_harness(context=context, classification=classification, llm=model, reader=None if resume else reader)
     report = state["investigation_report"]
     assert report.suspected_file == CONFIG and report.possible_cause
-    assert report.regression_attribution == "possible"
+    assert report.regression_attribution == "insufficient_evidence"
     assert state["context"].relevant_diffs == [diff_id]
     if resume:
         assert "fix" not in state
@@ -167,14 +140,14 @@ async def test_pages_context_and_report_reach_fixer(resume, caplog, monkeypatch)
         )
     assert state["fix"] == proposal and state["fix"].verified is False
     assert set(model.prompts[2][1]["evidence"]) == {"log:123"}
-    assert model.prompts[4][1]["context"] == state["context"].evidence
-    assert model.prompts[4][1]["investigation_report"] == report.model_dump()
+    assert model.prompts[3][1]["context"] == state["context"].evidence
+    assert model.prompts[3][1]["investigation_report"] == report.model_dump()
     assert {"evidence_id": diff_id} in model.transcripts[1]
-    assert {"evidence_id": f"source:{CONFIG}", "text": SOURCE} in model.transcripts[5]
+    assert {"evidence_id": f"source:{CONFIG}", "text": SOURCE} in model.transcripts[4]
     assert reader.read_files.await_args.args[0] == context.head_sha
     assert reader.read_files.await_args.args[1][0] == CONFIG
     assert "[context_agent] Tool started: get_changed_file_patch" in caplog.text
-    assert "[investigation_agent] Model turn 1/4" in caplog.text
+    assert "[investigation_agent] Model turn 1/1" in caplog.text
     assert f"[fixing_agent] Tool returned: read_fix_source path={CONFIG}" in caplog.text
     assert "[fixing_agent] Finished structured_response=True" in caplog.text
     assert EXPORT not in caplog.text
@@ -188,8 +161,7 @@ async def test_logged_change_can_reach_fixer_when_cause_is_unconfirmed():
     )
     model = FakeLLM(
         ContextSelection(relevant_diffs=[diff_id]),
-        [("inspect_evidence", {"name": "get_changed_file_patch", "path": CONFIG})],
-        finding("github_actions", packet, suspected_file=CONFIG, evidence_ids=["log:123", diff_id]),
+        finding("github_actions", packet, suspected_file=CONFIG),
         FixSuggestion(status="insufficient_evidence", summary="No verified edit", rationale="Cause remains unknown."),
     )
     reader = SimpleNamespace(read_files=AsyncMock(return_value={CONFIG: SOURCE}))
@@ -197,4 +169,4 @@ async def test_logged_change_can_reach_fixer_when_cause_is_unconfirmed():
     assert state["investigation_report"].possible_cause is None
     assert state["investigation_report"].suspected_file == CONFIG
     assert state["fix"].status == "insufficient_evidence"
-    assert model.prompts[3][1]["investigation_report"]["suspected_file"] == CONFIG
+    assert model.prompts[2][1]["investigation_report"]["suspected_file"] == CONFIG

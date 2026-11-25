@@ -19,7 +19,6 @@ from app.schema.investigation import (
     InvestigationLimits,
     RoutingDecision,
     SpecialistFinding,
-    ToolRequest,
 )
 from app.schema.investigation_context import (
     ChangedFile,
@@ -70,7 +69,7 @@ class FakeLLM(BaseChatModel):
         self.transcripts.append([json.loads(item.content) for item in messages if isinstance(item, ToolMessage)])
         reply = self.next_response()
         if isinstance(reply, list):
-            actions = [("inspect_evidence", item.model_dump()) if isinstance(item, ToolRequest) else item for item in reply]
+            actions = reply
         else:
             actions = [(type(reply).__name__, reply.model_dump(mode="json"))]
         message = AIMessage(content="", tool_calls=[
@@ -102,7 +101,7 @@ def make_context(*packets, **updates):
 
 def finding(specialist, packet, **updates):
     values = {"observed_failure": packet.error_message, "evidence_ids": [f"log:{packet.job_id}"],
-              "confidence": "insufficient_evidence", **updates}
+              "confidence": "insufficient_evidence", "suspected_file": None, **updates}
     return SpecialistFinding(specialist=specialist, **values)
 
 
@@ -166,27 +165,20 @@ async def test_pages_warning_is_not_a_cause_or_application_build():
     assert model.prompts[0][1]["failure"]["action"] == packet.action
 
 
-@pytest.mark.parametrize("limit", [1, 2])
-async def test_mixed_workflow_consults_only_with_evidence_and_budget(limit):
+async def test_mixed_workflow_passes_all_job_logs_in_one_model_call():
     python = reduce_job_log("AssertionError: mismatch", 1, "pytest", "pytest")
     javascript = reduce_job_log("src/main.ts(1,1): error TS2322: Type mismatch", 2, "Build")
     actions = reduce_job_log(PAGES_LOG, 3, "Deploy", "Setup Pages")
     context = make_context(python, javascript, actions)
-    tools = InvestigationTools(context, InvestigationLimits(consultations=limit))
-    model = FakeLLM(
-        finding("github_actions", actions, needs_second_opinion=True, suggested_specialist="javascript"),
-        finding("javascript", javascript, needs_second_opinion=True, suggested_specialist="python"),
-    )
-    result = await execute_investigation(context=context, classification=classify_failure(context), llm=model, tools=tools)
-    assert result.consulted == ["github_actions", "javascript"][:limit]
-    assert len(model.prompts) == limit
+    model = FakeLLM(finding("github_actions", actions))
+    result = await execute_investigation(context=context, classification=classify_failure(context), llm=model)
+    assert result.consulted == ["github_actions"]
+    assert len(model.prompts) == 1
     assert result.diagnosis.summary == PAGES_ERROR
-    assert any("consultation budget" in item for item in result.diagnosis.limitations)
-    if limit == 2:
-        assert model.prompts[1][1]["previous_findings"][0]["specialist"] == "github_actions"
+    assert set(model.prompts[0][1]["evidence"]) == {"log:1", "log:2", "log:3"}
 
 
-@pytest.mark.parametrize("log", ["TypeError: value is undefined", "##[warning]Node.js 20 is deprecated.", ""])
+@pytest.mark.parametrize("log", ["##[warning]Node.js 20 is deprecated.", ""])
 async def test_ambiguous_or_unknown_fails_closed(log):
     packet = reduce_job_log(log, 123, "CI", "Check")
     context = make_context(
@@ -223,29 +215,28 @@ async def test_optional_router_requires_distinct_routing_evidence():
     assert result.usage.routing_turns == 1 and result.consulted == ["javascript"]
 
 
-@pytest.mark.parametrize(("cause", "attribution"), [
-    ("The hard-coded value in app.py may explain the assertion mismatch.", "possible"),
-    ("The failure comes from imaginary.py.", "insufficient_evidence"),
-    ("The cause is at line 17 in app.py.", "insufficient_evidence"),
-    ("We verified the fix.", "insufficient_evidence"),
+@pytest.mark.parametrize(("cause", "supported"), [
+    ("The hard-coded value in app.py may explain the assertion mismatch.", True),
+    ("The failure comes from imaginary.py.", False),
+    ("The cause is at line 17 in app.py.", False),
+    ("We verified the fix.", False),
 ])
-async def test_validator_checks_references_and_keeps_attribution_cautious(cause, attribution):
-    packet = reduce_job_log("AssertionError: mismatch", 123, "pytest")
+async def test_validator_checks_log_explanations_without_claiming_regression(cause, supported):
+    packet = reduce_job_log("value = 'different'\nAssertionError: mismatch", 123, "pytest")
     context = make_context(
         packet, comparison_status="available", diff_available=True,
         changed_files=[ChangedFile(filename="app.py", status="modified", patch="+value = 'different'")],
         correlations=[FileCorrelation(failing_file="app.py", changed_file="app.py", match_type="direct")],
     )
     model = FakeLLM(
-        [ToolRequest(name="get_changed_file_patch", path="app.py")],
         finding(
-            "python", packet, confidence="medium", likely_root_cause=cause, evidence_ids=["log:123", "diff:app.py"],
-            cause_evidence_id="diff:app.py", cause_quote="value = 'different'",
+            "python", packet, confidence="medium", likely_root_cause=cause, suspected_file="app.py",
+            cause_evidence_id="log:123", cause_quote="value = 'different'",
         ),
     )
     result = await run_investigation(context=context, classification=classify_failure(context), llm=model)
-    assert result.regression_attribution == attribution
-    assert result.possible_cause == (cause if attribution == "possible" else None)
+    assert result.regression_attribution == "insufficient_evidence"
+    assert result.possible_cause == (cause if supported else None)
 
 
 async def test_invalid_citation_is_discarded():
@@ -258,28 +249,46 @@ async def test_invalid_citation_is_discarded():
     assert result.summary == packet.error_signature
 
 
-async def test_budget_exhaustion_and_model_api_failure_keep_observed_error():
+async def test_model_api_failure_keeps_observed_error():
     packet = reduce_job_log("AssertionError: mismatch", 123, "pytest")
     context = make_context(packet)
-    request = ToolRequest(name="get_failed_job_details", job_id=123)
-    model = FakeLLM([request, request], RuntimeError("NIM unavailable"))
-    tools = InvestigationTools(context, InvestigationLimits(specialist_turns=2, tool_calls=1))
-    result = await execute_investigation(context=context, classification=classify_failure(context), llm=model, tools=tools)
-    assert (result.usage.model_turns, result.usage.tool_calls) == (2, 1)
+    model = FakeLLM(RuntimeError("NIM unavailable"))
+    result = await execute_investigation(context=context, classification=classify_failure(context), llm=model)
+    assert (result.usage.model_turns, result.usage.tool_calls) == (1, 0)
     assert result.status == "partial" and result.diagnosis.summary == packet.error_signature
     assert len(result.findings) == 0
-    assert any("tool-call budget" in item for item in result.diagnosis.limitations)
     assert any("model response" in item for item in result.diagnosis.limitations)
 
 
-async def test_specialist_stops_after_four_model_turns():
-    packet = reduce_job_log("AssertionError: mismatch", 123, "pytest")
-    context = make_context(packet)
-    reply = [ToolRequest(name="get_failed_job_details", job_id=123)]
-    model = FakeLLM(*([reply] * 4))
+async def test_investigator_rejects_a_filename_outside_the_list():
+    packet = reduce_job_log("TypeError: value is undefined", 123, "CI", "Check")
+    context = make_context(packet, changed_files=[ChangedFile(filename="app.ts", status="modified")])
+    model = FakeLLM(finding("github_actions", packet, suspected_file="invented.ts"))
     result = await execute_investigation(context=context, classification=classify_failure(context), llm=model)
-    assert result.usage.model_turns == 4 and result.usage.tool_calls == 3
+    assert result.usage.model_turns == 1 and result.usage.tool_calls == 0
+    assert model.prompts[0][1]["changed_files"] == ["app.ts"]
+    assert result.diagnosis.suspected_file is None
     assert result.status == "partial" and result.diagnosis.summary == packet.error_signature
+
+
+async def test_missing_python_module_has_a_cited_report_without_a_model_finding():
+    packet = reduce_job_log(
+        "##[group]Run pytest --junitxml=reports/test-results.xml\n"
+        "src/calculator.py:5: in <module>\n"
+        "    import requests\n"
+        "E   ModuleNotFoundError: No module named 'requests'",
+        123, "Run Python Test Suite", "Run tests",
+    )
+    context = make_context(packet, comparison_status="no_previous_success")
+    classification = classify_failure(context)
+    assert "ModuleNotFoundError" in " ".join(classification.reasons)
+    model = FakeLLM(RuntimeError("model unavailable"))
+    result = await execute_investigation(context=context, classification=classification, llm=model)
+    assert result.consulted == ["python"]
+    assert result.diagnosis.summary == "ModuleNotFoundError: No module named 'requests'"
+    assert result.diagnosis.root_cause == "Python could not import `requests` in the CI environment."
+    assert result.diagnosis.evidence_validated and result.diagnosis.evidence_ids == ["log:123"]
+    assert result.diagnosis.regression_attribution == "insufficient_evidence"
 
 
 async def test_service_persists_diagnosis_metadata_and_legacy_api_shape():

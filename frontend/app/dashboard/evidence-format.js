@@ -25,18 +25,6 @@ export function comparisonLabel(evidence) {
   return reasonMessages[evidence.comparison_reason] || comparisonMessages[status] || comparisonMessages.not_attempted;
 }
 
-export function evidenceAnchor(reference) {
-  return `evidence-${encodeURIComponent(reference)}`;
-}
-
-export function revealEvidence(id) {
-  const target = document.getElementById(id);
-  if (!target) return;
-  target.open = true;
-  target.querySelector("summary")?.focus({ preventScroll: true });
-  target.scrollIntoView({ block: "start" });
-}
-
 export function logLineTone(line) {
   if (/^\s*(?:>\s*)?File ["'].*["'], line \d+|^\s*Traceback \(most recent call last\):/i.test(line)) return "trace";
   if (/(?:^\s*E\s+|\b\w*(?:Error|Exception):|\b(?:ERROR|FAILED|FATAL)\b|::error\b)/.test(line)) return "error";

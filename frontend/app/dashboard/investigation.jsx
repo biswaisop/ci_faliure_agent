@@ -3,11 +3,10 @@
 import { useAuth } from "@clerk/nextjs";
 import { ArrowUpRight } from "lucide-react";
 import Link from "next/link";
-import { EvidenceExplorer } from "./investigation-evidence";
 import { Diagnosis } from "./investigation-diagnosis";
 import { SuggestedFix } from "./suggested-fix";
 import { repositoryPath, useWorkflowData } from "./workflow-data";
-import { categoryLabels, RequestStatus, RunStatuses, workflowName, workspacePanel } from "./workflow-ui";
+import { RequestStatus, RunStatuses, workflowName } from "./workflow-ui";
 
 const collectionMessages = {
   pending: "Evidence collection is queued.",
@@ -26,22 +25,6 @@ function githubRunUrl(value) {
     return null;
   }
   return null;
-}
-
-function Classification({ classification }) {
-  return (
-    <section aria-labelledby="classification-heading" className={`${workspacePanel} space-y-2 p-4 sm:p-5`}>
-      <h2 id="classification-heading" className="text-lg font-semibold">Preliminary failure classification</h2>
-      {classification ? (
-        <>
-          <p className="text-sm text-foreground">{categoryLabels[classification.category]} <span className="text-muted">· Heuristic score {Math.round(classification.confidence * 100)}%</span></p>
-          <ul className="list-disc space-y-1 pl-5 text-sm text-muted">
-            {classification.reasons.map((reason, index) => <li key={`${index}:${reason}`}>{reason}</li>)}
-          </ul>
-        </>
-      ) : <p className="text-sm text-muted">A preliminary classification is unavailable.</p>}
-    </section>
-  );
 }
 
 export function Investigation({ repoId, runId, attempt }) {
@@ -77,8 +60,6 @@ export function Investigation({ repoId, runId, attempt }) {
           </header>
           <Diagnosis key={`${sessionId}:${runPath}`} diagnosis={diagnosis} evidence={evidence} status={run.investigation_status} runPath={runPath} getToken={getToken} />
           {(fix_suggestion || pr_comment) && <SuggestedFix fix={fix_suggestion} publication={pr_comment} />}
-          <Classification classification={run.classification} />
-          <EvidenceExplorer key={`${sessionId}:${runPath}`} evidence={evidence} runPath={runPath} getToken={getToken} />
         </div>
       )}
     </>

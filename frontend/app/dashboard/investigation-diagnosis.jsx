@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
 import Markdown from "react-markdown";
 import { apiFetch } from "../../lib/api.js";
-import { comparisonLabel, evidenceAnchor, revealEvidence } from "./evidence-format";
+import { comparisonLabel } from "./evidence-format";
 
 const investigationMessages = {
   pending: "The AI investigation is queued.",
   running: "The AI is analyzing the collected evidence.",
   completed: "The investigation completed, but its diagnosis is unavailable.",
-  failed: "The AI investigation couldn’t finish. You can still inspect the available evidence below.",
+  failed: "The AI investigation couldn’t finish. Open the workflow on GitHub to view its logs.",
   unavailable: "There is no AI investigation recorded for this attempt.",
 };
 
@@ -23,12 +23,11 @@ function Citations({ diagnosis, evidence }) {
   return (
     <ul aria-label="Evidence citations" className="flex flex-wrap gap-2">
       {[...references].map((reference) => {
-        const id = evidenceAnchor(reference);
         const inspectedSource = !unsupported.has(reference) && /^(source|workflow):/.test(reference);
         return (
           <li key={reference} className="max-w-full rounded-sm border border-line bg-background px-2 py-1 font-mono text-xs wrap-break-word">
             {available.has(reference) && !unsupported.has(reference) ? (
-              <a href={`#${encodeURIComponent(id)}`} className="text-accent underline underline-offset-4" onClick={() => revealEvidence(id)}>{reference}</a>
+              <span>{reference}</span>
             ) : <span className="text-muted">{reference} ({inspectedSource ? "inspected source" : "unavailable"})</span>}
           </li>
         );
@@ -37,21 +36,10 @@ function Citations({ diagnosis, evidence }) {
   );
 }
 
-function ReportLink({ href, children }) {
-  if (!href?.startsWith("#evidence-")) return children;
-  let id;
-  try {
-    id = decodeURIComponent(href.slice(1));
-  } catch {
-    return children;
-  }
-  return <a href={href} className="text-accent underline underline-offset-4" onClick={() => revealEvidence(id)}>{children}</a>;
-}
-
 export function ReportMarkdown({ text }) {
   return (
     <div className="max-w-[75ch] space-y-2 wrap-break-word text-sm leading-relaxed text-muted [&_h3]:mt-4 [&_h3]:font-semibold [&_h3]:text-foreground [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-5 [&_ol]:pl-5 [&_code]:font-mono [&_code]:text-foreground [&_pre]:overflow-x-auto [&_pre]:rounded-sm [&_pre]:bg-background [&_pre]:p-3">
-      <Markdown disallowedElements={["img"]} components={{ a: ReportLink }}>{text}</Markdown>
+      <Markdown disallowedElements={["a", "img"]} unwrapDisallowed>{text}</Markdown>
     </div>
   );
 }

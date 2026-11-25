@@ -5,18 +5,12 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from app.agent.investigation_agent import execute_investigation
 from app.agent.tools.investigation import InvestigationTools
 from app.schema.investigation import InvestigationLimits, ToolRequest
-from app.services.failure_classifier import classify_failure
 from app.services.gh_collector import GitHubCollector
 from app.services.github_webhook_event import RepositoryLocator
 from app.services.log_reducer import reduce_job_log
 from tests.test_investigation_agent import (
-    PAGES_ERROR,
-    PAGES_LOG,
-    FakeLLM,
-    finding,
     make_context,
 )
 
@@ -51,31 +45,25 @@ def repo_api(request):
     pytest.fail(f"Unexpected GitHub request {path}")
 
 
-async def test_pages_specialist_reads_only_authorized_workflow_and_config():
-    packet = reduce_job_log(PAGES_LOG, 123, "Deploy Next.js site to Pages", "Setup Pages")
-    context = make_context(packet, workflow_path=WORKFLOW)
+async def test_registry_reads_only_authorized_workflow_and_config():
+    context = make_context(workflow_path=WORKFLOW)
     ids = [f"workflow:{WORKFLOW}@{context.head_sha}", f"source:{NEXT_CONFIG}@{context.head_sha}"]
-    model = FakeLLM(
-        [
-            ToolRequest(name="read_workflow_file", path=WORKFLOW),
-            ToolRequest(name="read_repository_file", path=NEXT_CONFIG),
-            ToolRequest(name="read_workflow_file", path=".github/workflows/other.yml"),
-            ToolRequest(name="read_repository_file", path="app.py"),
-        ],
-        finding("github_actions", packet, evidence_ids=["log:123", *ids], investigated_files=[WORKFLOW, NEXT_CONFIG]),
-    )
     async with httpx.AsyncClient(transport=httpx.MockTransport(repo_api)) as client:
         tools = InvestigationTools(
             context, InvestigationLimits(), github=GitHubCollector(client=client), repo=REPO, token="installation-token",
         )
-        result = await execute_investigation(context=context, classification=classify_failure(context), llm=model, tools=tools)
-    assert result.consulted == ["github_actions"]
-    assert result.diagnosis.evidence_ids == ["log:123", *ids]
-    assert result.diagnosis.summary == PAGES_ERROR and result.diagnosis.possible_cause is None
-    assert result.usage.tool_calls == 4 and result.usage.github_calls == 4
-    assert result.sources == {path: FILES[path] for path in [WORKFLOW, NEXT_CONFIG]}
-    assert "installation-token" not in repr(model.prompts)
-    assert {"evidence_id": ids[0], "evidence": FILES[WORKFLOW]} in model.transcripts[1]
+        sent = {}
+        for request in [
+            ToolRequest(name="read_workflow_file", path=WORKFLOW),
+            ToolRequest(name="read_repository_file", path=NEXT_CONFIG),
+            ToolRequest(name="read_workflow_file", path=".github/workflows/other.yml"),
+            ToolRequest(name="read_repository_file", path="app.py"),
+        ]:
+            await tools.model_result(request, "github_actions", sent)
+    assert list(sent) == ids
+    assert sent[ids[0]] == FILES[WORKFLOW]
+    assert tools.usage.tool_calls == 4 and tools.usage.github_calls == 4
+    assert tools.sources == {path: FILES[path] for path in [WORKFLOW, NEXT_CONFIG]}
 
 
 @pytest.mark.parametrize("path", ["../app.py", "/app.py", "C:/app.py", "src\\app.py", "%2e%2e/app.py",

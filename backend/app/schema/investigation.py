@@ -41,7 +41,7 @@ class SpecialistFinding(BaseModel):
     specialist: Specialist
     observed_failure: FindingText | None = None
     likely_root_cause: FindingText | None = None
-    suspected_file: Annotated[str, Field(max_length=200)] | None = None
+    suspected_file: Annotated[str, Field(max_length=200)] | None
     confidence: Confidence
     evidence_ids: list[EvidenceID] = Field(default_factory=list, max_length=20)
     investigated_files: list[EvidenceID] = Field(default_factory=list, max_length=6)

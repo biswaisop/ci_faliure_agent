@@ -71,3 +71,24 @@ def test_failed_step_timing_excludes_errors_from_other_steps():
     assert packet.error_signature == "AssertionError: expected true"
     assert packet.runtime == "python" and packet.action is None
     assert "cleanup" not in packet.relevant_log
+
+
+def test_pytest_import_error_in_step_completion_second_is_retained():
+    packet = reduce_job_log(
+        "2026-11-25T18:08:07.9388563Z ##[group]Run pytest --junitxml=reports/test-results.xml\n"
+        "2026-11-25T18:08:07.9425199Z ##[endgroup]\n"
+        "2026-11-25T18:08:08.5094446Z collecting ... collected 0 items / 1 error\n"
+        "2026-11-25T18:08:08.5263004Z src/calculator.py:5: in <module>\n"
+        "2026-11-25T18:08:08.5282877Z     import requests\n"
+        "2026-11-25T18:08:08.5283670Z E   ModuleNotFoundError: No module named 'requests'\n"
+        "2026-11-25T18:08:08.5404557Z ##[error]Process completed with exit code 2.\n"
+        "2026-11-25T18:08:08.5496159Z ##[group]Run actions/upload-artifact@v4\n"
+        "2026-11-25T18:08:08.7294174Z RuntimeError: later step failed\n",
+        1, "Run Python Test Suite", "Run tests",
+        step_started_at=datetime(2026, 11, 25, 18, 8, 7, tzinfo=UTC),
+        step_completed_at=datetime(2026, 11, 25, 18, 8, 8, tzinfo=UTC),
+    )
+    assert packet.error_signature == "ModuleNotFoundError: No module named 'requests'"
+    assert packet.runtime == "python" and packet.action is None
+    assert "src/calculator.py:5" in packet.relevant_log
+    assert "later step failed" not in packet.relevant_log
