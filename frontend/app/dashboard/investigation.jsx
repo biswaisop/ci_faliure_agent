@@ -75,7 +75,7 @@ export function Investigation({ repoId, runId, attempt }) {
               {collectionMessages[run.collection_status] || "Evidence collection status is unavailable."}
             </p>
           </header>
-          <Diagnosis diagnosis={diagnosis} evidence={evidence} status={run.investigation_status} />
+          <Diagnosis key={`${sessionId}:${runPath}`} diagnosis={diagnosis} evidence={evidence} status={run.investigation_status} runPath={runPath} getToken={getToken} />
           {(fix_suggestion || pr_comment) && <SuggestedFix fix={fix_suggestion} publication={pr_comment} />}
           <Classification classification={run.classification} />
           <EvidenceExplorer key={`${sessionId}:${runPath}`} evidence={evidence} runPath={runPath} getToken={getToken} />

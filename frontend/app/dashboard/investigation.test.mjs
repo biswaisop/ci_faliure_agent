@@ -27,7 +27,7 @@ const jsxLoader = registerHooks({
   },
 });
 
-const { Diagnosis } = await import("./investigation-diagnosis.jsx");
+const { Diagnosis, ReportMarkdown, readMarkdown } = await import("./investigation-diagnosis.jsx");
 const { EvidenceExplorer } = await import("./investigation-evidence.jsx");
 const { EvidenceCode } = await import("./evidence-code.jsx");
 const { SuggestedFix } = await import("./suggested-fix.jsx");
@@ -39,23 +39,13 @@ const evidence = {
   changed_files: [], correlations: [], comparison_status: "no_previous_success", diff_available: false,
 };
 
-test("renders diagnosis hierarchy, distinct confidence, and safe evidence links", (t) => {
+test("shows completed report loading and the existing evidence links", (t) => {
   const html = renderToStaticMarkup(createElement(Diagnosis, { status: "completed", evidence, diagnosis: {
-    summary: "The checkout test raised a `TypeError` while calculating the invoice total. The failure interrupted the test before its output could be compared with the expected total.",
-    root_cause: "A string was passed to `total()`.",
-    possible_cause: "The input could have come from the checkout form.",
-    confidence: "high", regression_attribution: "insufficient_evidence", suggested_actions: ["Check `<script>` input."],
-    limitations: ["The failing line was visible in the log."], evidence_validated: true,
+    evidence_validated: true,
     evidence_ids: ["log:12"], unsupported_evidence_ids: ["diff:unknown.py"],
   } }));
-  const sections = ["The checkout test raised", "Root cause", "Possible cause", "The input could have come from the checkout form.",
-    "Reported failure confidence", "Regression attribution",
-    "Suggested next actions", "Evidence references"];
-  const positions = sections.map((label) => html.indexOf(label));
-  assert.ok(positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1])));
-  assert.match(html, />high<.*>insufficient evidence</);
-  assert.match(html, /<ol\b.*&lt;script&gt;/);
-  assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /Loading investigation report/);
+  assert.match(html, /Evidence references/);
   assert.match(html, /No earlier successful attempt was found/);
   assert.match(html, /diff:unknown\.py \(unavailable\)/);
 
@@ -74,35 +64,46 @@ test("renders diagnosis hierarchy, distinct confidence, and safe evidence links"
   assert.equal(details.open && focused && scrolled, true);
 });
 
-test("shows the failed action, likely cause and implicated diff together", () => {
+test("parses Markdown headings, code, lists and safe evidence links", () => {
   const filename = "next.config.mjs";
-  const html = renderToStaticMarkup(createElement(Diagnosis, {
-    status: "completed",
-    evidence: {
-      ...evidence,
-      failure_packets: [{ job_id: "12", failed_step: "Setup Pages", action: "actions/configure-pages@v5" }],
-      changed_files: [{ filename }],
-    },
-    diagnosis: {
-      summary: "TypeError: error must be an instance of Error",
-      root_cause: "The underlying cause could not be confirmed from the collected evidence.",
-      possible_cause: "The action likely could not rewrite a function export.",
-      suspected_file: filename,
-      confidence: "high",
-      suggested_actions: [],
-      evidence_ids: ["log:12", `diff:${filename}`, `source:${filename}@abc`],
-      unsupported_evidence_ids: [],
-      evidence_validated: true,
-    },
-  }));
-  assert.match(html, /Setup Pages<\/strong> failed while running .*actions\/configure-pages@v5/);
-  assert.match(html, /Likely cause.*could not rewrite a function export/);
-  assert.match(html, /source:next\.config\.mjs@abc \(inspected source\)/);
-  assert.doesNotMatch(html, /underlying cause could not be confirmed/);
-  assert.ok(html.includes(`href="#${encodeURIComponent(evidenceAnchor(`diff:${filename}`))}"`));
+  const anchor = encodeURIComponent(evidenceAnchor(`diff:${filename}`));
+  const text = [
+    "### What failed\n\n`Setup Pages` failed while running `actions/configure-pages@v5`.",
+    "### Likely cause\n\nThe action could not rewrite a function export.",
+    `### Suspected file\n\n[${filename}](#${anchor})`,
+    "### Suggested next actions\n\n1. Check `<script>` input.",
+    "[external](https://example.test/) ![image](https://example.test/track) <script>unsafe()</script>",
+  ].join("\n\n");
+  const html = renderToStaticMarkup(createElement(ReportMarkdown, { text }));
+  assert.match(html, /<h3>Likely cause<\/h3>/);
+  assert.match(html, /<code>Setup Pages<\/code> failed while running <code>actions\/configure-pages@v5<\/code>/);
+  assert.match(html, /<ol>\s*<li>Check <code>&lt;script&gt;<\/code>/);
+  assert.doesNotMatch(html, /<script>|<img|example\.test/);
+  assert.match(html, /&lt;script&gt;unsafe\(\)&lt;\/script&gt;/);
+  assert.ok(html.includes(`href="#${anchor}"`));
 });
 
-test("shows logged changed code for a saved diagnosis with no likely cause", () => {
+test("reads Markdown incrementally without corrupting characters split across chunks", async () => {
+  const bytes = new TextEncoder().encode("### What failed\n\nCafé");
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(bytes.slice(0, -1));
+      controller.enqueue(bytes.slice(-1));
+      controller.close();
+    },
+  });
+  const updates = [];
+  await readMarkdown(stream, (text) => updates.push(text));
+  assert.deepEqual(updates, ["### What failed\n\nCaf", "### What failed\n\nCafé"]);
+});
+
+test("waits for analysis to finish before displaying the report", () => {
+  const html = renderToStaticMarkup(createElement(Diagnosis, { status: "running", diagnosis: {}, evidence }));
+  assert.match(html, /AI is analyzing/);
+  assert.doesNotMatch(html, /Loading investigation report/);
+});
+
+test("highlights the implicated diff alongside the report", () => {
   const filename = "next.config.mjs";
   const line = "export default function config(phase) {";
   const view = {
@@ -110,16 +111,6 @@ test("shows logged changed code for a saved diagnosis with no likely cause", () 
     changed_files: [{ filename, status: "modified", patch: `+${line}` }],
     logged_changes: [{ path: filename, line }],
   };
-  const diagnosis = {
-    summary: "TypeError: error must be an instance of Error",
-    root_cause: "The underlying cause could not be confirmed from the collected evidence.",
-    confidence: "high", suggested_actions: [], evidence_ids: ["log:12"], unsupported_evidence_ids: [],
-  };
-  const report = renderToStaticMarkup(createElement(Diagnosis, { status: "completed", evidence: view, diagnosis }));
-  assert.match(report, /Suspected file.*next\.config\.mjs/);
-  assert.match(report, /The failed job printed this changed line.*export default function config\(phase\)/);
-  assert.doesNotMatch(report, /Root cause|underlying cause could not be confirmed/);
-
   const explorer = renderToStaticMarkup(createElement(EvidenceExplorer, { evidence: view }));
   assert.match(explorer, /Files linked to the failure/);
   assert.match(explorer, /<summary[^>]+bg-accent-soft[^>]*>next\.config\.mjs/);

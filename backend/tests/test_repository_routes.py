@@ -120,7 +120,9 @@ def test_workflow_reads_use_repository_scope_and_keep_attempts_separate(monkeypa
     client = TestClient(app)
     base = "/api/github/repositories"
     detail = f"{base}/7/runs/9/attempts/2"
+    report = f"{detail}/report"
     assert client.get(detail).status_code == 401
+    assert client.get(report).status_code == 401
     monkeypatch.setitem(app.dependency_overrides, current_clerk_user_id, lambda: "user_1")
 
     dashboard = client.get(base)
@@ -136,6 +138,7 @@ def test_workflow_reads_use_repository_scope_and_keep_attempts_separate(monkeypa
 
     authorization.get_authorized_repository.return_value = None
     assert client.get(detail).status_code == 404
+    assert client.get(report).status_code == 404
     runs.get_run.assert_not_awaited()
     authorization.get_authorized_repository.return_value = repo
     runs.get_run.return_value = run.model_copy(update={"installation_id": 99})
@@ -154,6 +157,9 @@ def test_workflow_reads_use_repository_scope_and_keep_attempts_separate(monkeypa
     assert result["evidence"]["failure_packets"][0]["job_id"] == str(job_id)
     assert result["evidence"]["failure_packets"][0]["relevant_log"] == "line one\nline two"
     assert "log_reference" not in result["evidence"]["failed_jobs"][0]
+    assert client.get(report).status_code == 404
+    investigations.get.return_value = {"status": "running"}
+    assert client.get(report).status_code == 409
 
     investigations.get.return_value = {
         "status": "completed", "error_code": "internal-only", "diagnosis": {
@@ -189,4 +195,19 @@ def test_workflow_reads_use_repository_scope_and_keep_attempts_separate(monkeypa
     assert [file["filename"] for file in result["evidence"]["changed_files"]] == ["next.config.mjs"]
     assert result["evidence"]["logged_changes"] == [{"path": "next.config.mjs", "line": export}]
     assert len(run.evidence.investigation_context.changed_files) == 2
+    investigations.get.return_value["diagnosis"].update({
+        "summary": "The action reported a `TypeError`.",
+        "root_cause": "The underlying cause could not be confirmed from the collected evidence.",
+        "suggested_actions": ["Review the export in `next.config.mjs`."],
+    })
+    with client.stream("GET", report) as response:
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "private, no-store"
+        assert response.headers["content-type"].startswith("text/markdown")
+        markdown = "".join(response.iter_text())
+    assert "### What failed\n\nThe action reported a `TypeError`." in markdown
+    assert "### Suspected file\n\n[` next.config.mjs `](#evidence-diff%253Anext.config.mjs)" in markdown
+    assert f"The failed job printed this changed line ` {export} `." in markdown
+    assert "1. Review the export in `next.config.mjs`." in markdown
+    assert "Root cause" not in markdown and "app.ts" not in markdown
 from contextlib import asynccontextmanager

@@ -16,7 +16,7 @@ from app.agent.investigation_router import (
 )
 from app.agent.runtime import invoke_agent
 from app.agent.tools.investigation import InvestigationTools, investigation_tools
-from app.schema.diagnosis import DiagnosisResult
+from app.schema.diagnosis import UNCONFIRMED_ROOT_CAUSE, DiagnosisResult
 from app.schema.failure_classification import FailureClassification
 from app.schema.failure_packet import FailurePacket
 from app.schema.investigation import (
@@ -346,7 +346,7 @@ def build_investigation_graph():
         }
         return {"diagnosis": DiagnosisResult(
             summary=observed or "The workflow failed. No specific error was verified in the cited logs.",
-            root_cause="The underlying cause could not be confirmed from the collected evidence.",
+            root_cause=UNCONFIRMED_ROOT_CAUSE,
             possible_cause=cause,
             suspected_file=primary.suspected_file if primary else None,
             confidence="high" if observed else "insufficient_evidence",

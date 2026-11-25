@@ -32,6 +32,7 @@ from app.services.fix_suggestion_service import suggestion_version
 from app.services.gh_auth import get_installation_token
 from app.services.github_authorization_service import GitHubAuthorizationService
 from app.services.investigation_context_builder import logged_changes
+from app.services.investigation_report import report_sections
 from app.services.post_investigation import followup_collection, followups_enabled
 from config import settings
 from dependencies import get_github_collector
@@ -198,14 +199,18 @@ async def read_attempt_followups(
     return {"fix_suggestion": fix, "pr_comment": comment}
 
 
+async def saved_investigation(run: WorkflowRun, investigations: InvestigationRepository) -> tuple[str | None, DiagnosisResult | None]:
+    investigation = await investigations.get(run)
+    status = investigation.get("status") if investigation else None
+    saved = investigation.get("diagnosis") if status == "completed" else None
+    return status, DiagnosisResult.model_validate(saved) if saved else None
+
+
 @router.get("/{repo_id}/runs/{run_id}/attempts/{attempt}", response_model=AttemptDetail)
 async def read_run(authorized_run: AuthorizedRun, investigations: Investigations):
     repo, run = authorized_run
 
-    investigation = await investigations.get(run)
-    status = investigation.get("status") if investigation else None
-    saved = investigation.get("diagnosis") if status == "completed" else None
-    diagnosis = DiagnosisResult.model_validate(saved) if saved else None
+    status, diagnosis = await saved_investigation(run, investigations)
     evidence = run.evidence
     context = evidence.investigation_context
     packets = (context.failure_packets if context else None) or evidence.failure_packets or run.failure_packets or []
@@ -238,6 +243,25 @@ async def read_run(authorized_run: AuthorizedRun, investigations: Investigations
             "files_limit_reached": context.files_limit_reached if context else False,
         },
     }
+
+
+@router.get("/{repo_id}/runs/{run_id}/attempts/{attempt}/report", response_class=StreamingResponse)
+async def read_investigation_report(authorized_run: AuthorizedRun, investigations: Investigations):
+    _, run = authorized_run
+    status, diagnosis = await saved_investigation(run, investigations)
+    if diagnosis is None:
+        if status in {"pending", "running"}:
+            raise HTTPException(status_code=409, detail="The investigation is still in progress.")
+        raise HTTPException(status_code=404, detail="Investigation report unavailable.")
+
+    evidence = run.evidence
+    context = evidence.investigation_context
+    packets = (context.failure_packets if context else None) or evidence.failure_packets or run.failure_packets or []
+    return StreamingResponse(
+        report_sections(diagnosis, packets, context.changed_files if context else []),
+        media_type="text/markdown",
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff", "X-Accel-Buffering": "no"},
+    )
 
 
 async def open_failed_job_log(job_id: GitHubPathId, authorized_run: AuthorizedRun) -> AsyncIterator[httpx.Response]:
