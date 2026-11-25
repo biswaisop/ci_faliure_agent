@@ -264,7 +264,7 @@ async def test_signed_failed_run_records_correct_attempt_and_jobs(mongo_db, webh
         processing_statuses.append((await self.get(run))["status"])
 
     async def diagnose(messages):
-        if "Investigate this CI failure" in messages[0].content:
+        if "Use the job log to choose" in messages[0].content:
             context = WorkflowRunKey(run_id=12345678, github_repo_id=445566, run_attempt=2)
             processing_statuses.append((await investigations.get(context))["status"])
 

@@ -223,8 +223,8 @@ class InvestigationTools:
         return file.name in PY_CONFIG | JS_CONFIG or (file.name.startswith("next.config.") and javascript)
 
 
-def investigation_tools(registry: InvestigationTools, specialist: Specialist, can_read):
-    sent = registry.evidence.copy()
+def investigation_tools(registry: InvestigationTools, specialist: Specialist, visible_evidence: dict[str, str], can_read):
+    sent = visible_evidence.copy()
 
     @tool
     async def inspect_changed_file(path: Annotated[str, Field(max_length=200)]) -> dict:

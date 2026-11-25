@@ -8,6 +8,7 @@ from app.core.clerk_auth import current_clerk_user_id
 from app.db.models.workflow_run import WorkflowRun
 from app.main import app
 from app.routes import repositories
+from app.schema.investigation_context import InvestigationContext
 
 
 def test_full_job_log_streams_only_for_the_authorized_run_attempt(monkeypatch):
@@ -169,4 +170,23 @@ def test_workflow_reads_use_repository_scope_and_keep_attempts_separate(monkeypa
     assert response.json()["fix_suggestion"]["status"] == "insufficient_evidence"
     assert response.json()["pr_comment"]["comment_url"].endswith("#issuecomment-3")
     assert "internal-only" not in response.text
+
+    export = "export default function config(phase) {"
+    run.evidence.investigation_context = InvestigationContext.model_validate({
+        "github_repo_id": 7, "run_id": 9, "run_attempt": 2, "workflow_id": 10, "head_sha": "abc123",
+        "comparison_status": "available", "diff_available": True,
+        "failure_packets": [{
+            "job_id": job_id, "job_name": "build", "failed_step": "Setup Pages",
+            "relevant_log": f'import {{ PHASE_DEVELOPMENT_SERVER }} from "next/constants.js";\n{export}\nTypeError: failed',
+        }],
+        "changed_files": [
+            {"filename": "app.ts", "status": "modified", "patch": "+const unrelated = true;"},
+            {"filename": "next.config.mjs", "status": "modified",
+             "patch": f'+import {{ PHASE_DEVELOPMENT_SERVER }} from "next/constants.js";\n-export default nextConfig;\n+{export}'},
+        ],
+    })
+    result = client.get(detail).json()
+    assert [file["filename"] for file in result["evidence"]["changed_files"]] == ["next.config.mjs"]
+    assert result["evidence"]["logged_changes"] == [{"path": "next.config.mjs", "line": export}]
+    assert len(run.evidence.investigation_context.changed_files) == 2
 from contextlib import asynccontextmanager

@@ -236,10 +236,13 @@ async def test_validator_checks_references_and_keeps_attribution_cautious(cause,
         changed_files=[ChangedFile(filename="app.py", status="modified", patch="+value = 'different'")],
         correlations=[FileCorrelation(failing_file="app.py", changed_file="app.py", match_type="direct")],
     )
-    model = FakeLLM(finding(
-        "python", packet, confidence="medium", likely_root_cause=cause, evidence_ids=["log:123", "diff:app.py"],
-        cause_evidence_id="diff:app.py", cause_quote="value = 'different'",
-    ))
+    model = FakeLLM(
+        [ToolRequest(name="get_changed_file_patch", path="app.py")],
+        finding(
+            "python", packet, confidence="medium", likely_root_cause=cause, evidence_ids=["log:123", "diff:app.py"],
+            cause_evidence_id="diff:app.py", cause_quote="value = 'different'",
+        ),
+    )
     result = await run_investigation(context=context, classification=classify_failure(context), llm=model)
     assert result.regression_attribution == attribution
     assert result.possible_cause == (cause if attribution == "possible" else None)

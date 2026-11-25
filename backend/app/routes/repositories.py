@@ -31,6 +31,7 @@ from app.schema.fix_suggestion import FixSuggestionView
 from app.services.fix_suggestion_service import suggestion_version
 from app.services.gh_auth import get_installation_token
 from app.services.github_authorization_service import GitHubAuthorizationService
+from app.services.investigation_context_builder import logged_changes
 from app.services.post_investigation import followup_collection, followups_enabled
 from config import settings
 from dependencies import get_github_collector
@@ -208,6 +209,11 @@ async def read_run(authorized_run: AuthorizedRun, investigations: Investigations
     evidence = run.evidence
     context = evidence.investigation_context
     packets = (context.failure_packets if context else None) or evidence.failure_packets or run.failure_packets or []
+    files = context.changed_files if context else []
+    correlations = context.correlations if context else []
+    matches = logged_changes(packets, files)
+    suspect = diagnosis.suspected_file if diagnosis else None
+    relevant_paths = {suspect} if suspect else set(matches) | {item.changed_file for item in correlations}
     try:
         followups = await read_attempt_followups(repo, run, diagnosis)
     except PyMongoError:
@@ -221,8 +227,9 @@ async def read_run(authorized_run: AuthorizedRun, investigations: Investigations
                 {**job.model_dump(exclude={"log_reference"}), "job_id": str(job.job_id)} for job in run.failed_jobs
             ],
             "failure_packets": [{**packet.model_dump(), "job_id": str(packet.job_id)} for packet in packets],
-            "changed_files": context.changed_files if context else [],
-            "correlations": context.correlations if context else [],
+            "changed_files": [file for file in files if file.filename in relevant_paths],
+            "correlations": [item for item in correlations if item.changed_file in relevant_paths],
+            "logged_changes": [{"path": path, "line": line} for path, line in matches.items() if path in relevant_paths],
             "base_sha": (context.base_sha if context else None) or evidence.base_sha,
             "diff_available": context.diff_available if context else False,
             "diff_may_be_incomplete": context.diff_may_be_incomplete if context else False,
