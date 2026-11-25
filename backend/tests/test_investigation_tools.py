@@ -6,8 +6,8 @@ import pytest
 from pydantic import ValidationError
 
 from app.agent.investigation_agent import execute_investigation
-from app.agent.investigation_tools import InvestigationTools
-from app.schema.investigation import InvestigationLimits, SpecialistTurn, ToolRequest
+from app.agent.tools.investigation import InvestigationTools
+from app.schema.investigation import InvestigationLimits, ToolRequest
 from app.services.failure_classifier import classify_failure
 from app.services.gh_collector import GitHubCollector
 from app.services.github_webhook_event import RepositoryLocator
@@ -56,12 +56,12 @@ async def test_pages_specialist_reads_only_authorized_workflow_and_config():
     context = make_context(packet, workflow_path=WORKFLOW)
     ids = [f"workflow:{WORKFLOW}@{context.head_sha}", f"source:{NEXT_CONFIG}@{context.head_sha}"]
     model = FakeLLM(
-        SpecialistTurn(tool_requests=[
+        [
             ToolRequest(name="read_workflow_file", path=WORKFLOW),
             ToolRequest(name="read_repository_file", path=NEXT_CONFIG),
             ToolRequest(name="read_workflow_file", path=".github/workflows/other.yml"),
             ToolRequest(name="read_repository_file", path="app.py"),
-        ]),
+        ],
         finding("github_actions", packet, evidence_ids=["log:123", *ids], investigated_files=[WORKFLOW, NEXT_CONFIG]),
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(repo_api)) as client:
@@ -75,7 +75,7 @@ async def test_pages_specialist_reads_only_authorized_workflow_and_config():
     assert result.usage.tool_calls == 4 and result.usage.github_calls == 4
     assert result.sources == {path: FILES[path] for path in [WORKFLOW, NEXT_CONFIG]}
     assert "installation-token" not in repr(model.prompts)
-    assert model.prompts[1][1]["evidence"][ids[0]] == FILES[WORKFLOW]
+    assert {"evidence_id": ids[0], "evidence": FILES[WORKFLOW]} in model.transcripts[1]
 
 
 @pytest.mark.parametrize("path", ["../app.py", "/app.py", "C:/app.py", "src\\app.py", "%2e%2e/app.py",

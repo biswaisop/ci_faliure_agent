@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import PurePosixPath
 
 import httpx
+from langchain.tools import tool
 
 from app.agent.investigation_router import JS_SUFFIXES
 from app.schema.investigation import (
@@ -29,7 +30,7 @@ class GitHubBudgetExhausted(Exception):
 
 
 class InvestigationTools:
-    """Per-investigation registry and tools shared by the specialist subgraphs."""
+    """Per-run evidence registry with repository and workflow scoped reads."""
 
     def __init__(
         self, context: InvestigationContext, limits: InvestigationLimits, *,
@@ -47,6 +48,7 @@ class InvestigationTools:
         self.sources: dict[str, str] = {}
         self.limitations: set[str] = set()
         self._started = False
+        self.lock = asyncio.Lock()
         self._unavailable = False
         self._attempted_sources: set[str] = set()
         self._failed_at = failed_at
@@ -100,6 +102,16 @@ class InvestigationTools:
                 return self._reply(limitation="GitHub rate limited investigation reads.")
             return self._reply(limitation="GitHub did not return usable investigation evidence.")
 
+    async def model_result(self, request: ToolRequest, specialist: Specialist, sent: dict[str, str]) -> dict:
+        async with self.lock:
+            result = await self.invoke(request, specialist)
+            if evidence_id := result.get("evidence_id"):
+                text = self.evidence[evidence_id]
+                if text != sent.get(evidence_id):
+                    sent[evidence_id] = text
+                    result["evidence"] = text
+            return result
+
     async def _invoke(self, request: ToolRequest, specialist: Specialist) -> dict:
         context = self.context
         if request.name in {"get_failed_job_details", "get_job_log_excerpt"}:
@@ -127,7 +139,8 @@ class InvestigationTools:
             if file is None or not file.patch:
                 return self._reply(limitation="The requested changed-file patch is unavailable.")
             evidence_id = f"diff:{file.filename}"
-            if evidence_id in self.evidence:
+            existing_patch = json.loads(self.evidence.get(evidence_id, "{}")).get("patch")
+            if existing_patch == file.patch:
                 return {"evidence_id": evidence_id}
             return self._reply(evidence_id=evidence_id, text=file.model_dump_json())
 
@@ -188,3 +201,22 @@ class InvestigationTools:
         if specialist == "javascript":
             return javascript
         return file.name in PY_CONFIG | JS_CONFIG or (file.name.startswith("next.config.") and javascript)
+
+
+def investigation_tools(registry: InvestigationTools, specialist: Specialist, can_read):
+    sent = registry.evidence.copy()
+
+    @tool(args_schema=ToolRequest)
+    async def inspect_evidence(
+        name: str, path: str | None = None, job_id: int | None = None,
+        start_line: int = 1, max_lines: int = 50, limit: int = 5,
+    ) -> dict:
+        """Read a job detail/log excerpt, diff summary/patch, repository or workflow file, or workflow history."""
+        if not can_read():
+            registry.limitations.add("The investigation model-tool budget was exhausted.")
+            return {"unavailable": "Report a finding from the evidence already collected."}
+        return await registry.model_result(ToolRequest(
+            name=name, path=path, job_id=job_id, start_line=start_line, max_lines=max_lines, limit=limit,
+        ), specialist, sent)
+
+    return [inspect_evidence] if registry.usage.tool_calls < registry.limits.tool_calls else []

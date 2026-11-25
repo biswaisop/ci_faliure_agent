@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 
 from pymongo.errors import PyMongoError
 
-from app.agent.investigation_tools import InvestigationTools
+from app.agent.tools.investigation import InvestigationTools
 from app.db.models.workflow_run import (
     EvidenceUpdate,
     FailedJob,

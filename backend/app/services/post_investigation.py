@@ -163,6 +163,7 @@ async def process_stage(key: WorkflowRunKey, installation_id: int, stage: str) -
         suggestion, retry = await FixSuggestionService(FixSuggestionRepository()).generate(
             run, context, classification, diagnosis, GitHubSourceReader(collector, locator, token),
             cached_sources=cached_sources,
+            relevant_diffs=(investigation.get("investigation_metadata") or {}).get("relevant_diffs"),
         )
         if suggestion and suggestion.status == "suggested" and settings.AUTO_PCI_PR_COMMENTS:
             await queue_followup(run, stages=["fix_comment"])

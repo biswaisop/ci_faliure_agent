@@ -1,18 +1,24 @@
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.runnables import RunnableLambda
+from pydantic import Field, PrivateAttr
 
 from app.agent.investigation_agent import execute_investigation, run_investigation
-from app.agent.investigation_tools import InvestigationTools
+from app.agent.tools.investigation import InvestigationTools
 from app.db.repositories.investigation_repository import InvestigationRepository
 from app.schema.diagnosis import DiagnosisResult
 from app.schema.investigation import (
+    ContextSelection,
     InvestigationLimits,
     RoutingDecision,
     SpecialistFinding,
-    SpecialistTurn,
     ToolRequest,
 )
 from app.schema.investigation_context import (
@@ -36,20 +42,52 @@ PAGES_LOG = (
 )
 
 
-class FakeLLM:
-    model = "test-model"
+class FakeLLM(BaseChatModel):
+    model: str = "test-model"
+    prompts: list = Field(default_factory=list)
+    transcripts: list = Field(default_factory=list)
+    _responses = PrivateAttr()
+    _before_reply = PrivateAttr(default=None)
 
     def __init__(self, *responses):
-        self.responses = iter(responses)
-        self.prompts = []
+        super().__init__()
+        self._responses = iter(responses)
+
+    @property
+    def _llm_type(self):
+        return "mock-nim"
+
+    def bind_tools(self, tools, **kwargs):
+        return self.bind(tools=tools)
+
+    def _generate(self, *args, **kwargs):
+        raise AssertionError("Agents must use async model calls")
+
+    async def _agenerate(self, messages, **kwargs):
+        if self._before_reply:
+            await self._before_reply(messages)
+        self.prompts.append((messages[0].content, json.loads(messages[1].content)))
+        self.transcripts.append([json.loads(item.content) for item in messages if isinstance(item, ToolMessage)])
+        reply = self.next_response()
+        if isinstance(reply, list):
+            actions = [("inspect_evidence", item.model_dump()) if isinstance(item, ToolRequest) else item for item in reply]
+        else:
+            actions = [(type(reply).__name__, reply.model_dump(mode="json"))]
+        message = AIMessage(content="", tool_calls=[
+            {"name": name, "args": args, "id": uuid4().hex} for name, args in actions
+        ])
+        return ChatResult(generations=[ChatGeneration(message=message)])
 
     def with_structured_output(self, schema):
-        assert schema in {SpecialistTurn, RoutingDecision}
-        return self
+        assert schema is RoutingDecision
+        return RunnableLambda(self.invoke_routing)
 
-    async def ainvoke(self, messages):
+    async def invoke_routing(self, messages):
         self.prompts.append((messages[0][1], json.loads(messages[1][1])))
-        reply = next(self.responses)
+        return self.next_response()
+
+    def next_response(self):
+        reply = next(self._responses)
         if isinstance(reply, Exception):
             raise reply
         return reply
@@ -65,7 +103,7 @@ def make_context(*packets, **updates):
 def finding(specialist, packet, **updates):
     values = {"observed_failure": packet.error_message, "evidence_ids": [f"log:{packet.job_id}"],
               "confidence": "insufficient_evidence", **updates}
-    return SpecialistTurn(finding=SpecialistFinding(specialist=specialist, **values))
+    return SpecialistFinding(specialist=specialist, **values)
 
 
 @pytest.mark.parametrize(("log", "step", "runtime", "origin", "specialist"), [
@@ -221,7 +259,7 @@ async def test_budget_exhaustion_and_model_api_failure_keep_observed_error():
     packet = reduce_job_log("AssertionError: mismatch", 123, "pytest")
     context = make_context(packet)
     request = ToolRequest(name="get_failed_job_details", job_id=123)
-    model = FakeLLM(SpecialistTurn(tool_requests=[request, request]), RuntimeError("NIM unavailable"))
+    model = FakeLLM([request, request], RuntimeError("NIM unavailable"))
     tools = InvestigationTools(context, InvestigationLimits(specialist_turns=2, tool_calls=1))
     result = await execute_investigation(context=context, classification=classify_failure(context), llm=model, tools=tools)
     assert (result.usage.model_turns, result.usage.tool_calls) == (2, 1)
@@ -234,7 +272,7 @@ async def test_budget_exhaustion_and_model_api_failure_keep_observed_error():
 async def test_specialist_stops_after_four_model_turns():
     packet = reduce_job_log("AssertionError: mismatch", 123, "pytest")
     context = make_context(packet)
-    reply = SpecialistTurn(tool_requests=[ToolRequest(name="get_failed_job_details", job_id=123)])
+    reply = [ToolRequest(name="get_failed_job_details", job_id=123)]
     model = FakeLLM(*([reply] * 4))
     result = await execute_investigation(context=context, classification=classify_failure(context), llm=model)
     assert result.usage.model_turns == 4 and result.usage.tool_calls == 3
@@ -243,10 +281,14 @@ async def test_specialist_stops_after_four_model_turns():
 
 async def test_service_persists_diagnosis_metadata_and_legacy_api_shape():
     packet = reduce_job_log("AssertionError: mismatch", 123, "pytest")
-    context = make_context(packet, comparison_status="available")
+    context = make_context(
+        packet, comparison_status="available",
+        changed_files=[ChangedFile(filename="app.py", status="modified", patch="+return different")],
+    )
     collection = SimpleNamespace(update_one=AsyncMock(return_value=SimpleNamespace(matched_count=1)))
     repository = InvestigationRepository(collection)
-    result = await InvestigationService(repository, FakeLLM(finding("python", packet))).investigate(
+    model = FakeLLM(ContextSelection(relevant_diffs=["diff:app.py"]), finding("python", packet))
+    result = await InvestigationService(repository, model).investigate(
         context=context, classification=classify_failure(context),
     )
     key, update = collection.update_one.await_args.args
@@ -255,5 +297,7 @@ async def test_service_persists_diagnosis_metadata_and_legacy_api_shape():
     assert stored["status"] == stored["execution_status"] == "completed"
     assert stored["investigation_metadata"]["selected_specialist"] == "python"
     assert stored["investigation_metadata"]["model"] == "test-model"
+    assert stored["investigation_metadata"]["relevant_diffs"] == ["diff:app.py"]
+    assert stored["investigation_metadata"]["usage"]["context_model_turns"] == 1
     assert DiagnosisResult.model_validate(stored["diagnosis"]) == result
     assert DiagnosisResult.model_validate({"summary": "Old", "root_cause": "Unknown", "confidence": "high"}).limitations == []

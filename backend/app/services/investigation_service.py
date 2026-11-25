@@ -1,10 +1,8 @@
 
 import logging
 
-from app.agent.investigation_agent import (
-    execute_investigation,
-)
-from app.agent.investigation_tools import InvestigationTools
+from app.agent.harness import run_harness
+from app.agent.tools.investigation import InvestigationTools
 from app.db.repositories.investigation_repository import (
     InvestigationRepository,
 )
@@ -43,12 +41,13 @@ class InvestigationService:
         try:
             await self.repository.mark_running(context)
             llm = self.llm if self.llm is not None else get_llm()
-            execution = await execute_investigation(
+            state = await run_harness(
                 context=context,
                 classification=classification,
                 llm=llm,
                 tools=self.tools or InvestigationTools(context, settings.AUTO_PCI_INVESTIGATION_LIMITS),
             )
+            execution = state["execution"]
             diagnosis = execution.diagnosis
 
             await self.repository.save_diagnosis(

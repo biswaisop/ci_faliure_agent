@@ -227,9 +227,10 @@ async def test_followup_order_and_failure_isolation(monkeypatch, fix_fails, gith
     order = []
     rendered = []
 
-    async def generate(*args, cached_sources=None):
+    async def generate(*args, cached_sources=None, relevant_diffs=None):
         nonlocal stored
         assert cached_sources is None
+        assert relevant_diffs is None
         order.append("fix")
         if fix_fails:
             return None, 60

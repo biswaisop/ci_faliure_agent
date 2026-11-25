@@ -15,6 +15,7 @@ from app.services.github_source_reader import (
     MAX_SOURCE_BYTES,
     GitHubSourceReader,
 )
+from tests.test_investigation_agent import FakeLLM
 from tests.test_pr_commenting import (
     CLASSIFICATION,
     CONTEXT,
@@ -57,7 +58,7 @@ async def test_fix_graph_validates_edit_without_execution(case):
         draft.changes[0].replacement_snippet = "exit(0)"
     if case == "empty":
         draft = proposal(status="insufficient_evidence", changes=[])
-    model = Mock(with_structured_output=Mock(return_value=Mock(ainvoke=AsyncMock(return_value=draft))))
+    model = FakeLLM(draft)
     result = await run_fix_suggestion(
         diagnosis=DIAGNOSIS, classification=CLASSIFICATION, context=FAILURE, reader=reader, llm=model,
     )
@@ -67,16 +68,13 @@ async def test_fix_graph_validates_edit_without_execution(case):
     assert sha == HEAD and FILE in paths
     assert result.status == ("suggested" if case == "valid" else "insufficient_evidence")
     assert bool(result.changes) == (case == "valid")
-    if case == "missing":
-        model.with_structured_output.assert_not_called()
-    else:
-        model.with_structured_output.assert_called_once_with(FixSuggestion)
+    assert len(model.prompts) == (0 if case == "missing" else 1)
 
 
 @pytest.mark.asyncio
 async def test_fix_reuses_source_from_the_investigation():
     reader = Mock(read_files=AsyncMock(return_value={}))
-    model = Mock(with_structured_output=Mock(return_value=Mock(ainvoke=AsyncMock(return_value=proposal()))))
+    model = FakeLLM(proposal())
     result = await run_fix_suggestion(
         diagnosis=DIAGNOSIS, classification=CLASSIFICATION, context=FAILURE, reader=reader, llm=model,
         cached_sources={FILE: SOURCE},
@@ -127,7 +125,7 @@ async def test_fix_service_persists_failure_without_touching_diagnosis(monkeypat
         with pytest.raises(ValidationError) as caught:
             FixSuggestion.model_validate({"verified": True})
         error = caught.value
-    monkeypatch.setattr(fix_suggestion_service, "run_fix_suggestion", AsyncMock(side_effect=error))
+    monkeypatch.setattr(fix_suggestion_service, "run_harness", AsyncMock(side_effect=error))
     result, retry = await FixSuggestionService(repo).generate(workflow(), FAILURE, CLASSIFICATION, DIAGNOSIS, Mock())
     assert result is None
     assert retry == (None if invalid else 60)
