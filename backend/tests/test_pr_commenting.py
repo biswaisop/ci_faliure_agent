@@ -22,7 +22,7 @@ MERGE = "b" * 40
 REPO = RepositoryLocator(owner="sample", name="project", github_repo_id=10)
 CLASSIFICATION = FailureClassification(category="unknown", confidence=0.2, reasons=[])
 CONTEXT = InvestigationContext(github_repo_id=10, run_id=11, run_attempt=1, workflow_id=12, head_sha=HEAD)
-DIAGNOSIS = DiagnosisResult(summary="Observed failure", root_cause="Unknown", confidence="high")
+DIAGNOSIS = DiagnosisResult(summary="Observed failure", root_cause="Unknown", confidence="high", evidence_validated=True)
 
 
 def workflow(**fields):
@@ -227,8 +227,9 @@ async def test_followup_order_and_failure_isolation(monkeypatch, fix_fails, gith
     order = []
     rendered = []
 
-    async def generate(*args):
+    async def generate(*args, cached_sources=None):
         nonlocal stored
+        assert cached_sources is None
         order.append("fix")
         if fix_fails:
             return None, 60
@@ -292,3 +293,8 @@ async def test_followup_order_and_failure_isolation(monkeypatch, fix_fails, gith
         None, "installation_unavailable",
     )
     token.assert_not_awaited()
+
+    investigation["diagnosis"]["evidence_validated"] = False
+    assert await post_investigation.process_stage(workflow(), 13, "diagnosis_comment") == (
+        None, "diagnosis_unvalidated",
+    )

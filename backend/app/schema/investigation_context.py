@@ -39,6 +39,7 @@ class InvestigationContext(BaseModel):
     run_id: int
     run_attempt: int
     workflow_id: int
+    workflow_path: str | None = None
 
     head_sha: str
     base_sha: str | None = None

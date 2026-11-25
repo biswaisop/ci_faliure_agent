@@ -10,7 +10,13 @@ from app.schema.diagnosis import DiagnosisResult
 from app.schema.failure_classification import FailureClassification
 from app.schema.fix_suggestion import FixSuggestion
 from app.schema.investigation_context import InvestigationContext
-from app.services.github_source_reader import MANIFESTS, MAX_FILES, source_path_allowed
+from app.services.github_source_reader import (
+    MANIFESTS,
+    MAX_FILES,
+    MAX_SOURCE_BYTES,
+    source_path_allowed,
+)
+from app.services.investigation_context_builder import extract_failing_files
 from app.services.pr_comment_renderer import SENSITIVE_TEXT
 
 TRACEBACK_PATH = re.compile(r'File "([^"\n]+)", line \d+|(?m:^[ \t]*([^\s:]+\.py):\d+:)')
@@ -50,6 +56,7 @@ def insufficient_evidence() -> FixSuggestion:
 def prepare_fix_context(state: FixState) -> dict:
     context = state["context"]
     paths = [correlation.changed_file for correlation in context.correlations]
+    paths.extend(sorted(extract_failing_files(context.failure_packets[:5])))
     for packet in context.failure_packets[:5]:
         paths.extend(test.split("::", 1)[0] for test in packet.failing_tests[:10])
         for match in TRACEBACK_PATH.finditer(packet.relevant_log[:5000]):
@@ -64,9 +71,7 @@ def prepare_fix_context(state: FixState) -> dict:
     if dependency:
         candidates = [*candidates[:MAX_FILES - 2], *MANIFESTS[:2], *candidates[MAX_FILES - 2:]]
     candidates = list(dict.fromkeys([*candidates, *MANIFESTS]))[:MAX_FILES]
-    evidence = prepare_evidence({
-        "context": context, "classification": state["classification"], "evidence": {}, "draft": None, "diagnosis": None,
-    })["evidence"]
+    evidence = prepare_evidence({"context": context})["evidence"]
     return {
         "candidates": candidates,
         "evidence": {key: value for key, value in evidence.items() if not SENSITIVE_TEXT.search(value)},
@@ -109,9 +114,36 @@ def validate_proposal(proposal: FixSuggestion, evidence: dict[str, str], sources
 
 async def run_fix_suggestion(
     *, diagnosis: DiagnosisResult, classification: FailureClassification, context: InvestigationContext, reader, llm,
+    cached_sources: dict[str, str] | None = None,
 ) -> FixSuggestion:
+    if not diagnosis.possible_cause and any(
+        packet.failure_origin in {"third_party_action", "github_platform", "runner_environment"}
+        and f"log:{packet.job_id}" in diagnosis.evidence_ids for packet in context.failure_packets
+    ):
+        return insufficient_evidence()
+
     async def inspect_repository(state: FixState) -> dict:
-        sources = await reader.read_files(context.head_sha, state["candidates"])
+        cached = cached_sources or {}
+        cited_paths = [
+            path for path in cached if f"source:{path}@{context.head_sha}" in diagnosis.evidence_ids
+            and source_path_allowed(path)
+        ]
+        candidates = list(dict.fromkeys([*cited_paths, *state["candidates"]]))[:MAX_FILES]
+        sources = {}
+        remaining = MAX_SOURCE_BYTES
+        for path in candidates:
+            source = cached.get(path, "")
+            size = len(source.encode("utf-8"))
+            if 0 < size <= remaining and not SENSITIVE_TEXT.search(source):
+                sources[path] = source
+                remaining -= size
+        pending = [path for path in candidates if path not in cached]
+        if pending:
+            for path, source in (await reader.read_files(context.head_sha, pending)).items():
+                size = len(source.encode("utf-8"))
+                if size <= remaining:
+                    sources[path] = source
+                    remaining -= size
         return {
             "sources": sources,
             "evidence": {**state["evidence"], **{f"source:{path}": source for path, source in sources.items()}},

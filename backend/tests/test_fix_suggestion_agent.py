@@ -74,6 +74,18 @@ async def test_fix_graph_validates_edit_without_execution(case):
 
 
 @pytest.mark.asyncio
+async def test_fix_reuses_source_from_the_investigation():
+    reader = Mock(read_files=AsyncMock(return_value={}))
+    model = Mock(with_structured_output=Mock(return_value=Mock(ainvoke=AsyncMock(return_value=proposal()))))
+    result = await run_fix_suggestion(
+        diagnosis=DIAGNOSIS, classification=CLASSIFICATION, context=FAILURE, reader=reader, llm=model,
+        cached_sources={FILE: SOURCE},
+    )
+    assert result.status == "suggested" and not result.verified
+    assert FILE not in reader.read_files.await_args.args[1]
+
+
+@pytest.mark.asyncio
 async def test_source_reads_are_bounded_and_exclude_symlinks_secrets_and_traversal():
     tree_sha, link_sha = "b" * 40, "c" * 40
     files = [f"src/{i}.py" for i in range(8)]

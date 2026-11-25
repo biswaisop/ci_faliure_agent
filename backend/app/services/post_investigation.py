@@ -122,7 +122,7 @@ async def run_followup(key: WorkflowRunKey, stage: str, *, ready: bool = False) 
 
 async def process_stage(key: WorkflowRunKey, installation_id: int, stage: str) -> tuple[int | None, str | None]:
     run = await WorkflowRunRepository().get_run(key, installation_id=installation_id)
-    investigation = await InvestigationRepository(MongoDb.investigations()).get(key)
+    investigation = await InvestigationRepository(MongoDb.investigations()).get(key, include_fix_sources=stage == "fix")
     if not run or not investigation or investigation["status"] in {"pending", "running"}:
         return 60, "investigation_pending"
     if investigation["status"] != "completed":
@@ -135,6 +135,9 @@ async def process_stage(key: WorkflowRunKey, installation_id: int, stage: str) -
         or context.run_attempt != run.run_attempt or context.head_sha != run.head_sha
     ):
         return None, "evidence_mismatch"
+    diagnosis = DiagnosisResult.model_validate(investigation["diagnosis"])
+    if not diagnosis.evidence_validated:
+        return None, "diagnosis_unvalidated"
     installation = await GitHubInstallationRepository().get_by_installation_id(installation_id)
     repository = await GitHubRepositoryRepository().get_by_repo_id(run.github_repo_id)
     if (
@@ -148,11 +151,18 @@ async def process_stage(key: WorkflowRunKey, installation_id: int, stage: str) -
     if not token:
         return 60, "unauthorized_installation"
     locator = RepositoryLocator(owner=repository.owner.login, name=repository.name, github_repo_id=run.github_repo_id)
-    diagnosis = DiagnosisResult.model_validate(investigation["diagnosis"])
     collector = get_github_collector()
     if stage == "fix":
+        if run.github_head_repo_id not in {None, run.github_repo_id}:
+            return None, "source_revision_unavailable"
+        cache = investigation.get("fix_sources") or {}
+        cached_sources = (
+            {item["path"]: item["text"] for item in cache["files"]}
+            if cache.get("sha") == context.head_sha else None
+        )
         suggestion, retry = await FixSuggestionService(FixSuggestionRepository()).generate(
             run, context, classification, diagnosis, GitHubSourceReader(collector, locator, token),
+            cached_sources=cached_sources,
         )
         if suggestion and suggestion.status == "suggested" and settings.AUTO_PCI_PR_COMMENTS:
             await queue_followup(run, stages=["fix_comment"])

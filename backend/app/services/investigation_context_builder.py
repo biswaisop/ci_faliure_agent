@@ -11,12 +11,12 @@ from app.schema.investigation_context import (
     InvestigationContext,
 )
 
-# Recognizes common pytest file paths in log excerpts.
-PYTHON_PATH_RE = re.compile(
+# Recognizes repository-relative paths in test and compiler diagnostics.
+SOURCE_PATH_RE = re.compile(
     r"(?<![\w/.-])"
-    r"((?:[\w.-]+/)*[\w.-]+\.py)"
-    r"(?::\d+)?"
+    r"((?:[\w.-]+/)*[\w.-]+\.(?:py|[jt]sx?|[cm][jt]s))\b"
 )
+WORKSPACE_PREFIX = re.compile(r"/(?:home/runner/work|github/workspace)/([^/\s]+)/\1/")
 
 
 def normalize_path(path: str) -> str:
@@ -31,7 +31,7 @@ def normalize_path(path: str) -> str:
 def extract_failing_files(
     packets: list[FailurePacket],
 ) -> set[str]:
-    """Find Python file references in failure packets."""
+    """Find source file references in failure packets."""
 
     files: set[str] = set()
 
@@ -41,8 +41,8 @@ def extract_failing_files(
             if path.endswith(".py"):
                 files.add(normalize_path(path))
 
-        for match in PYTHON_PATH_RE.finditer(
-            packet.relevant_log
+        for match in SOURCE_PATH_RE.finditer(
+            WORKSPACE_PREFIX.sub("", packet.relevant_log)
         ):
             files.add(normalize_path(match.group(1)))
 
@@ -100,6 +100,7 @@ def build_investigation_context(
     run_id: int,
     run_attempt: int,
     workflow_id: int,
+    workflow_path: str | None = None,
     head_sha: str,
     head_branch: str | None,
     failure_packets: list[FailurePacket],
@@ -129,6 +130,7 @@ def build_investigation_context(
         run_id=run_id,
         run_attempt=run_attempt,
         workflow_id=workflow_id,
+        workflow_path=workflow_path,
         head_sha=head_sha,
         head_branch=head_branch,
         base_sha=base_sha,

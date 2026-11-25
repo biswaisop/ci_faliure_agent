@@ -30,6 +30,7 @@ class WorkflowRunMetadata(WorkflowRunKey):
     installation_id: GitHubId | None = None
     workflow_id: GitHubId
     workflow_name: ShortText | None = None
+    workflow_path: ShortText | None = None
     run_number: GitHubId | None = None
     head_sha: ShortText
     head_branch: ShortText | None = None

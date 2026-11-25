@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 
 from pymongo.errors import PyMongoError
 
+from app.agent.investigation_tools import InvestigationTools
 from app.db.models.workflow_run import (
     EvidenceUpdate,
     FailedJob,
@@ -27,9 +28,9 @@ from app.db.repositories.workflow_run_repository import (
 )
 from app.services.failure_classifier import classify_failure
 from app.services.gh_auth import get_installation_id, get_installation_token
-from app.services.gh_collector import GitHubCollector
+from app.services.gh_collector import GitHubCollector, github_timestamp
 from app.services.github_sync_service import GitHubSyncService
-from app.services.github_webhook_event import GitHubWebhook
+from app.services.github_webhook_event import GitHubWebhook, RepositoryLocator
 from app.services.investigation_context_builder import build_investigation_context
 from app.services.investigation_service import (
     InvestigationService,
@@ -41,6 +42,7 @@ from app.services.post_investigation import (
     queue_followup,
 )
 from app.services.webhook_errors import WebhookProcessingError, processing_error
+from config import settings
 from dependencies import get_github_collector
 
 logger = logging.getLogger(__name__)
@@ -101,7 +103,7 @@ async def collect_workflow_run(
     9. Mark evidence collection status as completed.
     """
     run, repo = event.run, event.repository
-    if run is None or repo is None:
+    if run is None or repo is None or run.github_repo_id != repo.github_repo_id:
         raise WebhookProcessingError("invalid_github_data")
 
     try:
@@ -140,7 +142,7 @@ async def collect_workflow_run(
             raise WebhookProcessingError("repository_unavailable")
 
         # 5. Acquire scoped GitHub App installation access token
-        token = await get_installation_token(installation_id)
+        token = await get_installation_token(installation_id, repository_id=repo.github_repo_id)
         if not isinstance(token, str) or not token.strip():
             raise WebhookProcessingError("missing_installation_token")
 
@@ -201,14 +203,16 @@ async def collect_workflow_run(
                     if step.get("conclusion") == "failure"
                 ]
 
-            failed_step_name = failed_steps[0].get("name") if failed_steps else None
+            failed_step = failed_steps[0] if failed_steps else {}
 
             # Extract deterministic failure packet
             packet = reduce_job_log(
                 raw_log=raw_log,
                 job_id=job_id,
                 job_name=job_name,
-                failed_step=failed_step_name,
+                failed_step=failed_step.get("name"),
+                step_started_at=github_timestamp(failed_step.get("started_at")),
+                step_completed_at=github_timestamp(failed_step.get("completed_at")),
             )
             failure_packets.append(packet)
 
@@ -240,6 +244,7 @@ async def collect_workflow_run(
             run_id=run.run_id,
             run_attempt=run.run_attempt,
             workflow_id=run.workflow_id,
+            workflow_path=run.workflow_path,
             head_sha=run.head_sha,
             head_branch=run.head_branch,
             failure_packets=failure_packets,
@@ -296,7 +301,15 @@ async def collect_workflow_run(
         await runs.update_collection_status(run, "completed")
 
         try:
-            await InvestigationService(investigations).investigate(
+            same_repository = run.github_head_repo_id == repo.github_repo_id
+            tools = InvestigationTools(
+                context, settings.AUTO_PCI_INVESTIGATION_LIMITS,
+                github=collector if same_repository else None,
+                repo=RepositoryLocator(owner=owner, name=repo_name, github_repo_id=repo.github_repo_id),
+                token=token if same_repository else None,
+                failed_at=run.github_created_at,
+            )
+            await InvestigationService(investigations, tools=tools).investigate(
                 context=context,
                 classification=classification,
             )

@@ -8,22 +8,21 @@ from app.schema.investigation_context import (
     InvestigationContext,
 )
 
-
 INFRA_PATTERNS = [
-    re.compile(r"connection timed out", re.I),
-    re.compile(r"could not resolve host", re.I),
-    re.compile(r"temporary failure in name resolution", re.I),
-    re.compile(r"no space left on device", re.I),
-    re.compile(r"runner.*lost communication", re.I),
-    re.compile(r"rate limit exceeded", re.I),
+    re.compile(r"connection timed out", re.IGNORECASE),
+    re.compile(r"could not resolve host", re.IGNORECASE),
+    re.compile(r"temporary failure in name resolution", re.IGNORECASE),
+    re.compile(r"no space left on device", re.IGNORECASE),
+    re.compile(r"runner.*lost communication", re.IGNORECASE),
+    re.compile(r"rate limit exceeded", re.IGNORECASE),
 ]
 
 DEPENDENCY_PATTERNS = [
-    re.compile(r"resolutionimpossible", re.I),
-    re.compile(r"no matching distribution found", re.I),
-    re.compile(r"could not find a version that satisfies", re.I),
-    re.compile(r"dependency conflict", re.I),
-    re.compile(r"failed to build wheel", re.I),
+    re.compile(r"resolutionimpossible", re.IGNORECASE),
+    re.compile(r"no matching distribution found", re.IGNORECASE),
+    re.compile(r"could not find a version that satisfies", re.IGNORECASE),
+    re.compile(r"dependency conflict", re.IGNORECASE),
+    re.compile(r"failed to build wheel", re.IGNORECASE),
 ]
 
 CODE_ERROR_TYPES = {
@@ -75,6 +74,7 @@ def classify_failure(
         for packet in packets
         if packet.error_type
     }
+    origins = {packet.failure_origin for packet in packets}
 
     # Use reduced evidence rather than full job logs.
     evidence = "\n".join(
@@ -97,7 +97,7 @@ def classify_failure(
     )
 
     # 1. Infrastructure / environment errors
-    if any(
+    if origins & {"third_party_action", "github_platform", "runner_environment"} or any(
         pattern.search(evidence)
         for pattern in INFRA_PATTERNS
     ):
@@ -110,7 +110,7 @@ def classify_failure(
         )
 
     # 2. Explicit dependency installation failures
-    if any(
+    if "dependency_installation" in origins or any(
         pattern.search(evidence)
         for pattern in DEPENDENCY_PATTERNS
     ):
@@ -129,15 +129,14 @@ def classify_failure(
             reasons=reasons,
         )
 
-    # 3. Python code errors
+    # 3. Application and test errors
     code_errors = error_types.intersection(
         CODE_ERROR_TYPES
     )
 
     if code_errors:
-        reasons = [
-            f"Detected Python error: {', '.join(sorted(code_errors))}"
-        ]
+        language = "Python" if any(packet.runtime == "python" for packet in packets) else "application"
+        reasons = [f"Detected {language} error: {', '.join(sorted(code_errors))}"]
 
         confidence = 0.7
 
