@@ -7,6 +7,7 @@ const investigationMessages = {
   failed: "The AI investigation couldn’t finish. You can still inspect the available evidence below.",
   unavailable: "There is no AI investigation recorded for this attempt.",
 };
+const unconfirmedRootCause = "The underlying cause could not be confirmed from the collected evidence.";
 
 function Citations({ diagnosis, evidence }) {
   const available = new Set([
@@ -21,11 +22,12 @@ function Citations({ diagnosis, evidence }) {
     <ul aria-label="Evidence citations" className="flex flex-wrap gap-2">
       {[...references].map((reference) => {
         const id = evidenceAnchor(reference);
+        const inspectedSource = !unsupported.has(reference) && /^(source|workflow):/.test(reference);
         return (
           <li key={reference} className="max-w-full rounded-sm border border-line bg-background px-2 py-1 font-mono text-xs wrap-break-word">
             {available.has(reference) && !unsupported.has(reference) ? (
               <a href={`#${encodeURIComponent(id)}`} className="text-accent underline underline-offset-4" onClick={() => revealEvidence(id)}>{reference}</a>
-            ) : <span className="text-muted">{reference} (unavailable)</span>}
+            ) : <span className="text-muted">{reference} ({inspectedSource ? "inspected source" : "unavailable"})</span>}
           </li>
         );
       })}
@@ -40,21 +42,43 @@ function InlineCode({ text }) {
 }
 
 export function Diagnosis({ diagnosis, evidence, status }) {
+  const primary = evidence?.failure_packets?.find((packet) => diagnosis?.evidence_ids?.[0] === `log:${packet.job_id}`);
+  const suspect = diagnosis?.suspected_file;
+  const suspectAnchor = suspect && evidence?.changed_files?.some((file) => file.filename === suspect)
+    ? evidenceAnchor(`diff:${suspect}`)
+    : null;
+  const hasLikelyCause = diagnosis?.possible_cause && diagnosis.root_cause === unconfirmedRootCause;
+
   return (
     <section aria-labelledby="ai-heading" className="space-y-4 rounded-md border border-line bg-panel p-4 sm:p-5">
       <h2 id="ai-heading" className="text-lg font-semibold">AI diagnosis</h2>
       {status === "completed" && diagnosis ? (
         <>
+          {primary?.failed_step && primary.action && (
+            <p className="text-sm wrap-break-word">
+              <strong>{primary.failed_step}</strong> failed while running <code className="font-mono">{primary.action}</code>.
+            </p>
+          )}
           <p className="max-w-[70ch] leading-relaxed wrap-break-word whitespace-pre-wrap"><InlineCode text={diagnosis.summary} /></p>
-          <div>
-            <h3 className="text-sm font-semibold">Root cause</h3>
-            <p className="mt-1 max-w-[75ch] text-sm leading-relaxed wrap-break-word whitespace-pre-wrap text-muted"><InlineCode text={diagnosis.root_cause} /></p>
-          </div>
+          {!hasLikelyCause && (
+            <div>
+              <h3 className="text-sm font-semibold">Root cause</h3>
+              <p className="mt-1 max-w-[75ch] text-sm leading-relaxed wrap-break-word whitespace-pre-wrap text-muted"><InlineCode text={diagnosis.root_cause} /></p>
+            </div>
+          )}
           {diagnosis.possible_cause && (
             <div>
-              <h3 className="text-sm font-semibold">Possible cause</h3>
+              <h3 className="text-sm font-semibold">{hasLikelyCause ? "Likely cause" : "Possible cause"}</h3>
               <p className="mt-1 max-w-[75ch] text-sm leading-relaxed wrap-break-word whitespace-pre-wrap text-muted"><InlineCode text={diagnosis.possible_cause} /></p>
             </div>
+          )}
+          {suspect && (
+            <p className="text-sm wrap-break-word">
+              <span className="font-semibold">Suspected file</span>{" "}
+              {suspectAnchor ? (
+                <a href={`#${encodeURIComponent(suspectAnchor)}`} className="font-mono text-accent underline underline-offset-4" onClick={() => revealEvidence(suspectAnchor)}>{suspect}</a>
+              ) : <code className="font-mono">{suspect}</code>}
+            </p>
           )}
           <div className="space-y-2 rounded-sm border border-line bg-background p-3">
             <dl className="grid gap-x-5 gap-y-2 text-sm sm:grid-cols-2">

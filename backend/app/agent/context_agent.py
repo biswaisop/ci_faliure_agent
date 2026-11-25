@@ -9,6 +9,8 @@ from app.schema.failure_classification import FailureClassification
 from app.schema.failure_packet import FailurePacket
 from app.schema.investigation import ContextSelection, PreparedContext
 from app.schema.investigation_context import InvestigationContext
+from app.services.github_source_reader import repository_path_allowed
+from app.services.log_reducer import strip_masked_inputs
 from app.services.pr_comment_renderer import SENSITIVE_TEXT
 
 logger = logging.getLogger(__name__)
@@ -27,7 +29,7 @@ def prepare_context(
     _, primary = route_specialist(packets, context, classification)
     evidence: dict[str, str] = {}
     for packet in sorted(packets, key=lambda packet: packet is not primary)[:MAX_PACKETS]:
-        log = packet.relevant_log
+        log = strip_masked_inputs(packet.relevant_log)
         error_offset = log.find(packet.error_message or "")
         if error_offset >= MAX_LOG_CHARS - 2000:
             log = log[max(0, error_offset - 2000):]
@@ -38,7 +40,7 @@ def prepare_context(
             "failing_tests": packet.failing_tests[:20], "relevant_log": log[:MAX_LOG_CHARS],
         }, ensure_ascii=False)
     correlated = {item.changed_file for item in context.correlations}
-    files = {f"diff:{file.filename}": file for file in context.changed_files}
+    files = {f"diff:{file.filename}": file for file in context.changed_files if repository_path_allowed(file.filename)}
     selected = [key for key in dict.fromkeys(relevant_diffs or []) if key in files][:10]
     selected_ids = selected or sorted(
         files, key=lambda key: (files[key].filename not in correlated, key),
@@ -65,8 +67,8 @@ async def run_context_agent(
     context: InvestigationContext, classification: FailureClassification, llm, registry: InvestigationTools,
 ) -> PreparedContext:
     prepared = prepare_context(context, classification)
-    paths = [file.filename for file in context.changed_files[:50] if not SENSITIVE_TEXT.search(file.filename)]
-    if not any(file.patch for file in context.changed_files) or not paths:
+    paths = list(registry.changed_files)
+    if not any(file.patch for file in registry.changed_files.values()):
         return prepared
     registry.evidence.update(prepared.evidence)
 

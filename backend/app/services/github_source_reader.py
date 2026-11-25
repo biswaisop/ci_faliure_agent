@@ -25,12 +25,17 @@ SENSITIVE_PATH = re.compile(
 )
 
 
-def source_path_allowed(path: str) -> bool:
+def repository_path_allowed(path: str) -> bool:
     return (
         re.fullmatch(r"[a-zA-Z0-9_.@/-]{1,200}", path) is not None
         and all(part and part != ".." and (not part.startswith(".") or part == ".github") for part in path.split("/"))
         and not SENSITIVE_PATH.search(path)
-        and (PurePosixPath(path).suffix.lower() in TEXT_SUFFIXES or PurePosixPath(path).name in LOCKFILES or path in MANIFESTS)
+    )
+
+
+def source_path_allowed(path: str) -> bool:
+    return repository_path_allowed(path) and (
+        PurePosixPath(path).suffix.lower() in TEXT_SUFFIXES or PurePosixPath(path).name in LOCKFILES or path in MANIFESTS
     )
 
 
