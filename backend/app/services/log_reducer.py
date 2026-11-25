@@ -113,9 +113,12 @@ def in_step(line: str, started_at: datetime, completed_at: datetime) -> bool:
     if not match:
         return False
     try:
-        return started_at <= datetime.fromisoformat(match[1]) <= completed_at
+        timestamp = datetime.fromisoformat(match[1])
     except ValueError:
         return False
+    # GitHub step metadata can report whole seconds while job logs include fractions.
+    end_timestamp = timestamp if completed_at.microsecond else timestamp.replace(microsecond=0)
+    return started_at <= timestamp and end_timestamp <= completed_at
 
 
 def identify_failure(
@@ -195,6 +198,7 @@ def reduce_job_log(
 
     job_lines = clean_log(raw_log or "")
     lines = job_lines
+    step_lines = []
     if step_started_at and step_completed_at and raw_log:
         step_lines = [
             line for raw, line in zip(raw_log.splitlines(), job_lines, strict=True)
@@ -212,6 +216,11 @@ def reduce_job_log(
         start = matching[-1]
         end = next((index for index, _ in groups if index > start), len(lines))
         lines = lines[start:end]
+    elif step_lines and step_completed_at is not None and not step_completed_at.microsecond:
+        # A later step can start in the same second as the failed command's exit.
+        exit_index = next((index for index, line in enumerate(lines) if EXIT.search(line)), None)
+        if exit_index is not None:
+            lines = lines[:exit_index + 1]
 
     error_type, error_message, error_index = extract_error(lines)
     last_before_error = error_index if error_index is not None else len(lines) - 1

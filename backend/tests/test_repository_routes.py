@@ -206,7 +206,7 @@ def test_workflow_reads_use_repository_scope_and_keep_attempts_separate(monkeypa
         assert response.headers["content-type"].startswith("text/markdown")
         markdown = "".join(response.iter_text())
     assert "### What failed\n\nThe action reported a `TypeError`." in markdown
-    assert "### Suspected file\n\n[` next.config.mjs `](#evidence-diff%253Anext.config.mjs)" in markdown
+    assert "### Suspected file\n\n` next.config.mjs `" in markdown
     assert f"The failed job printed this changed line ` {export} `." in markdown
     assert "1. Review the export in `next.config.mjs`." in markdown
     assert "Root cause" not in markdown and "app.ts" not in markdown

@@ -28,10 +28,9 @@ const jsxLoader = registerHooks({
 });
 
 const { Diagnosis, ReportMarkdown, readMarkdown } = await import("./investigation-diagnosis.jsx");
-const { EvidenceExplorer } = await import("./investigation-evidence.jsx");
 const { EvidenceCode } = await import("./evidence-code.jsx");
 const { SuggestedFix } = await import("./suggested-fix.jsx");
-const { diffLines, evidenceAnchor, revealEvidence } = await import("./evidence-format.js");
+const { diffLines } = await import("./evidence-format.js");
 jsxLoader.deregister();
 
 const evidence = {
@@ -39,7 +38,7 @@ const evidence = {
   changed_files: [], correlations: [], comparison_status: "no_previous_success", diff_available: false,
 };
 
-test("shows completed report loading and the existing evidence links", (t) => {
+test("shows completed report loading and evidence references without explorer links", () => {
   const html = renderToStaticMarkup(createElement(Diagnosis, { status: "completed", evidence, diagnosis: {
     evidence_validated: true,
     evidence_ids: ["log:12"], unsupported_evidence_ids: ["diff:unknown.py"],
@@ -49,28 +48,16 @@ test("shows completed report loading and the existing evidence links", (t) => {
   assert.match(html, /No earlier successful attempt was found/);
   assert.match(html, /diff:unknown\.py \(unavailable\)/);
 
-  const id = evidenceAnchor("log:12");
-  assert.match(html, new RegExp(`href="#${encodeURIComponent(id)}"`));
-  let focused = false;
-  let scrolled = false;
-  const details = {
-    open: false, querySelector: () => ({ focus: () => { focused = true; } }),
-    scrollIntoView: ({ block }) => { scrolled = block === "start"; },
-  };
-  globalThis.document = { getElementById: (key) => key === id ? details : null };
-  t.after(() => { delete globalThis.document; });
-  revealEvidence(id);
-  revealEvidence("unavailable-id");
-  assert.equal(details.open && focused && scrolled, true);
+  assert.match(html, /<span>log:12<\/span>/);
+  assert.doesNotMatch(html, /href="#evidence-/);
 });
 
-test("parses Markdown headings, code, lists and safe evidence links", () => {
+test("parses Markdown headings, code and lists without explorer links", () => {
   const filename = "next.config.mjs";
-  const anchor = encodeURIComponent(evidenceAnchor(`diff:${filename}`));
   const text = [
     "### What failed\n\n`Setup Pages` failed while running `actions/configure-pages@v5`.",
     "### Likely cause\n\nThe action could not rewrite a function export.",
-    `### Suspected file\n\n[${filename}](#${anchor})`,
+    `### Suspected file\n\n[${filename}](#evidence-diff%253Anext.config.mjs)`,
     "### Suggested next actions\n\n1. Check `<script>` input.",
     "[external](https://example.test/) ![image](https://example.test/track) <script>unsafe()</script>",
   ].join("\n\n");
@@ -80,7 +67,8 @@ test("parses Markdown headings, code, lists and safe evidence links", () => {
   assert.match(html, /<ol>\s*<li>Check <code>&lt;script&gt;<\/code>/);
   assert.doesNotMatch(html, /<script>|<img|example\.test/);
   assert.match(html, /&lt;script&gt;unsafe\(\)&lt;\/script&gt;/);
-  assert.ok(html.includes(`href="#${anchor}"`));
+  assert.match(html, /<p>next\.config\.mjs<\/p>/);
+  assert.doesNotMatch(html, /href="#evidence-/);
 });
 
 test("reads Markdown incrementally without corrupting characters split across chunks", async () => {
@@ -103,30 +91,8 @@ test("waits for analysis to finish before displaying the report", () => {
   assert.doesNotMatch(html, /Loading investigation report/);
 });
 
-test("highlights the implicated diff alongside the report", () => {
-  const filename = "next.config.mjs";
-  const line = "export default function config(phase) {";
-  const view = {
-    ...evidence, diff_available: true,
-    changed_files: [{ filename, status: "modified", patch: `+${line}` }],
-    logged_changes: [{ path: filename, line }],
-  };
-  const explorer = renderToStaticMarkup(createElement(EvidenceExplorer, { evidence: view }));
-  assert.match(explorer, /Files linked to the failure/);
-  assert.match(explorer, /<summary[^>]+bg-accent-soft[^>]*>next\.config\.mjs/);
-});
-
-test("renders comparison outcomes and the corresponding safe unified diff", () => {
-  const unavailable = renderToStaticMarkup(createElement(EvidenceExplorer, { evidence }));
-  assert.match(unavailable, /No earlier successful attempt was found/);
+test("renders a safe unified diff", () => {
   const patch = "@@ -3,2 +3,2 @@\n line\n-<script>\n+safe";
-  const file = { filename: "src/my file.py", status: "modified", patch };
-  const available = renderToStaticMarkup(createElement(EvidenceExplorer, { evidence: {
-    ...evidence, comparison_status: "available", diff_available: true, changed_files: [file],
-  } }));
-  assert.match(available, /Verified ancestor/);
-  assert.ok(available.includes(`id="${evidenceAnchor(`diff:${file.filename}`)}"`));
-  assert.match(available, /src\/my file\.py · modified/);
   const rows = diffLines(patch);
   assert.deepEqual(rows.map(({ tone, oldLine, newLine }) => [tone, oldLine, newLine]), [
     ["trace", undefined, undefined], ["context", 3, 3], ["removed", 4, undefined], ["added", undefined, 4],

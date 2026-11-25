@@ -2,11 +2,8 @@ import asyncio
 import json
 from datetime import datetime
 from pathlib import PurePosixPath
-from typing import Annotated
 
 import httpx
-from langchain.tools import tool
-from pydantic import Field
 
 from app.agent.investigation_router import JS_SUFFIXES
 from app.schema.investigation import (
@@ -221,44 +218,3 @@ class InvestigationTools:
         if specialist == "javascript":
             return javascript
         return file.name in PY_CONFIG | JS_CONFIG or (file.name.startswith("next.config.") and javascript)
-
-
-def investigation_tools(registry: InvestigationTools, specialist: Specialist, visible_evidence: dict[str, str], can_read):
-    sent = visible_evidence.copy()
-
-    @tool
-    async def inspect_changed_file(path: Annotated[str, Field(max_length=200)]) -> dict:
-        """Inspect a path from changed_files. Return its comparison patch and source at the failed commit."""
-        if not can_read():
-            registry.limitations.add("The investigation model-tool budget was exhausted.")
-            return {"unavailable": "Report a finding from the evidence already collected."}
-        file = registry.changed_files.get(path)
-        if file is None:
-            return {"unavailable": "Choose a path from changed_files."}
-        result = {}
-        if file.patch:
-            result["patch"] = await registry.model_result(
-                ToolRequest(name="get_changed_file_patch", path=path), specialist, sent,
-            )
-        if file.status != "removed" and source_path_allowed(path):
-            result["source"] = await registry.model_result(
-                ToolRequest(name="read_repository_file", path=path), specialist, sent,
-            )
-        return result or {"unavailable": "The changed file has no patch or current source."}
-
-    @tool(args_schema=ToolRequest)
-    async def inspect_evidence(
-        name: str, path: str | None = None, job_id: int | None = None,
-        start_line: int = 1, max_lines: int = 50, limit: int = 5,
-    ) -> dict:
-        """Read a job detail/log excerpt, diff summary/patch, repository or workflow file, or workflow history."""
-        if not can_read():
-            registry.limitations.add("The investigation model-tool budget was exhausted.")
-            return {"unavailable": "Report a finding from the evidence already collected."}
-        return await registry.model_result(ToolRequest(
-            name=name, path=path, job_id=job_id, start_line=start_line, max_lines=max_lines, limit=limit,
-        ), specialist, sent)
-
-    if registry.usage.tool_calls >= registry.limits.tool_calls:
-        return []
-    return [inspect_changed_file, inspect_evidence] if registry.changed_files else [inspect_evidence]
